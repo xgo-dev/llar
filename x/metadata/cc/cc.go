@@ -31,9 +31,7 @@ type Metadata struct {
 type optionClass int
 
 const (
-	classC optionClass = iota
-	classCXX
-	classLD
+	classLD optionClass = iota
 	classLibraryDir
 	classSysroot
 	classStd
@@ -175,10 +173,6 @@ func classify(meta *Metadata, opt parsedOption) {
 		meta.libraryDirs = append(meta.libraryDirs, opt.values...)
 	case classStd:
 		classifyStdFlag(meta, opt.tokens, opt.values)
-	case classC:
-		meta.CFLAGS = append(meta.CFLAGS, opt.tokens...)
-	case classCXX:
-		meta.CXXFLAGS = append(meta.CXXFLAGS, opt.tokens...)
 	default:
 		meta.CCFLAGS = append(meta.CCFLAGS, opt.tokens...)
 	}
@@ -206,13 +200,17 @@ func isCXXStd(value string) bool {
 
 func isCStd(value string) bool {
 	switch {
-	case strings.HasPrefix(value, "c") && !strings.HasPrefix(value, "c++"):
+	case strings.HasPrefix(value, "c") && len(value) > 1 && isDigit(value[1]):
 		return true
-	case strings.HasPrefix(value, "gnu") && !strings.HasPrefix(value, "gnu++"):
+	case strings.HasPrefix(value, "gnu") && len(value) > 3 && isDigit(value[3]):
 		return true
 	default:
 		return false
 	}
+}
+
+func isDigit(b byte) bool {
+	return b >= '0' && b <= '9'
 }
 
 func missingArgError(flag string) error {

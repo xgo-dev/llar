@@ -135,6 +135,37 @@ func TestParseClassifiesSeparateLanguageStdFlags(t *testing.T) {
 	}
 }
 
+func TestParseClassifiesGNUStdFlags(t *testing.T) {
+	meta, err := Parse("-std=gnu11 --std=gnu++20")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if !reflect.DeepEqual(meta.CFLAGS, []string{"-std=gnu11"}) {
+		t.Fatalf("CFLAGS = %#v", meta.CFLAGS)
+	}
+	if !reflect.DeepEqual(meta.CXXFLAGS, []string{"--std=gnu++20"}) {
+		t.Fatalf("CXXFLAGS = %#v", meta.CXXFLAGS)
+	}
+}
+
+func TestParseKeepsUnknownStdFlagsInCCFLAGS(t *testing.T) {
+	meta, err := Parse("-std=objc2 --std cuda")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if !reflect.DeepEqual(meta.CCFLAGS, []string{"-std=objc2", "--std", "cuda"}) {
+		t.Fatalf("CCFLAGS = %#v", meta.CCFLAGS)
+	}
+	if len(meta.CFLAGS) != 0 {
+		t.Fatalf("CFLAGS = %#v, want empty", meta.CFLAGS)
+	}
+	if len(meta.CXXFLAGS) != 0 {
+		t.Fatalf("CXXFLAGS = %#v, want empty", meta.CXXFLAGS)
+	}
+}
+
 func TestParseExtractsSysrootDir(t *testing.T) {
 	meta, err := Parse("--sysroot=/sdk -I/include -L/lib")
 	if err != nil {
@@ -152,6 +183,17 @@ func TestParseExtractsSysrootDir(t *testing.T) {
 	}
 	if len(meta.LDFLAGS) != 0 {
 		t.Fatalf("LDFLAGS = %#v, want empty", meta.LDFLAGS)
+	}
+}
+
+func TestParseExtractsJoinedSysrootForms(t *testing.T) {
+	meta, err := Parse("--sysroot=/old -sysroot=/middle -isysroot/new")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if got := meta.Sysroot(); got != "/new" {
+		t.Fatalf("Sysroot = %q, want /new", got)
 	}
 }
 
@@ -199,10 +241,16 @@ func TestParseReturnsErrorForMissingSysrootArg(t *testing.T) {
 }
 
 func TestParseReturnsErrorForMissingSeparateLinkerArg(t *testing.T) {
-	for _, raw := range []string{"-L", "-l", "--library-directory", "-Xlinker", "-z", "-lazy_framework"} {
+	for _, raw := range []string{"-L", "-l", "--library-directory", "-Xlinker", "-z", "-lazy_framework", "-lazy_library", "-std", "--std"} {
 		if _, err := Parse(raw); err == nil {
 			t.Fatalf("Parse(%q) error = nil, want error", raw)
 		}
+	}
+}
+
+func TestParseReturnsShellQuoteError(t *testing.T) {
+	if _, err := Parse(`-DNAME="unterminated`); err == nil {
+		t.Fatal("Parse error = nil, want shellquote error")
 	}
 }
 
@@ -217,5 +265,19 @@ func TestParseSplitsQuotedFlags(t *testing.T) {
 	}
 	if !reflect.DeepEqual(meta.LDFLAGS, []string{`-Wl,-rpath,/path with space`, "-lfoo"}) {
 		t.Fatalf("LDFLAGS = %#v", meta.LDFLAGS)
+	}
+}
+
+func TestLibraryDirsReturnsCopy(t *testing.T) {
+	meta, err := Parse("-L/lib")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	got := meta.LibraryDirs()
+	got[0] = "/mutated"
+
+	if !reflect.DeepEqual(meta.LibraryDirs(), []string{"/lib"}) {
+		t.Fatalf("LibraryDirs after mutation = %#v", meta.LibraryDirs())
 	}
 }
