@@ -10,10 +10,19 @@ import (
 
 // Metadata is the parsed form of LLAR C/C++ raw metadata flags.
 type Metadata struct {
-	CCFLAGS  []string
-	CFLAGS   []string
+	// CCFLAGS contains compiler flags that are not classified as C-specific,
+	// C++-specific, linker-related, sysroot, or library search directory flags.
+	CCFLAGS []string
+
+	// CFLAGS contains flags that apply specifically to C compilation.
+	CFLAGS []string
+
+	// CXXFLAGS contains flags that apply specifically to C++ compilation.
 	CXXFLAGS []string
-	LDFLAGS  []string
+
+	// LDFLAGS contains linker-related flags other than parsed library search
+	// directories.
+	LDFLAGS []string
 
 	sysroot     string
 	libraryDirs []string
