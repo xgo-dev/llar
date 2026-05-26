@@ -6,6 +6,7 @@ require (
 	github.com/goplus/ixgo v0.61.0
 	github.com/goplus/mod v0.19.0
 	github.com/goplus/xgo v1.6.1
+	github.com/jessevdk/go-flags v1.6.1
 	github.com/qiniu/x v1.16.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.32.0

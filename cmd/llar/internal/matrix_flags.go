@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/formula"
+	goflags "github.com/jessevdk/go-flags"
 	"github.com/spf13/cobra"
 )
 
@@ -33,72 +34,78 @@ func resolveMatrixStr(cmd *cobra.Command) (string, error) {
 	return m.Combinations()[0], nil
 }
 
-// extractMatrixFlags scans subArgs and collects unknown long flags as
-// matrix dimensions. Known flags are identified via cmd.Flags().Lookup().
-// Returns nil when no matrix flags are found.
+// extractMatrixFlags uses go-flags to parse subArgs. All flags enter
+// UnknownOptionHandler; known flags (via cmd.Flags().Lookup) are
+// skipped, unknown long flags are collected as matrix dimensions.
 func extractMatrixFlags(cmd *cobra.Command, subArgs []string) (*formula.Matrix, error) {
 	dims := map[string]string{}
+	var matrixErr error
 
-	for i := 0; i < len(subArgs); i++ {
-		arg := subArgs[i]
-		if arg == "--" {
-			break
-		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			continue
+	parser := goflags.NewParser(&struct{}{}, goflags.PassDoubleDash)
+	parser.UnknownOptionHandler = func(option string, arg goflags.SplitArgument, args []string) ([]string, error) {
+		if matrixErr != nil {
+			return args, nil
 		}
 
-		// Short flag
-		if !strings.HasPrefix(arg, "--") {
-			c := string(arg[1])
-			if f := cmd.Flags().ShorthandLookup(c); f != nil {
-				if f.NoOptDefVal == "" {
-					i++
-				}
-				continue
+		// Known long flag → skip, consume value if needed
+		if f := cmd.Flags().Lookup(option); f != nil {
+			if _, hasVal := arg.Value(); !hasVal && f.NoOptDefVal == "" && len(args) > 0 {
+				return args[1:], nil
 			}
-			return nil, fmt.Errorf("unknown short flag %q", arg)
+			return args, nil
 		}
 
-		// Long flag
-		body := arg[2:]
-		name, val, hasEq := strings.Cut(body, "=")
-
-		// --matrix-<key> → force matrix even if key matches known flag
-		matrixKey := ""
-		if rest, ok := strings.CutPrefix(name, "matrix-"); ok {
-			matrixKey = rest
-			if matrixKey == "" {
-				return nil, fmt.Errorf("missing matrix key in --matrix-")
+		// Known short flag → skip
+		if len(option) == 1 && cmd.Flags().ShorthandLookup(option) != nil {
+			if f := cmd.Flags().ShorthandLookup(option); f.NoOptDefVal == "" && len(args) > 0 {
+				return args[1:], nil
 			}
-		} else if f := cmd.Flags().Lookup(name); f != nil {
-			// Known to Cobra → skip
-			if !hasEq && f.NoOptDefVal == "" {
-				i++
-			}
-			continue
-		} else {
-			matrixKey = name
+			return args, nil
 		}
 
-		if !matrixKeyRE.MatchString(matrixKey) {
-			return nil, fmt.Errorf("invalid matrix key %q", matrixKey)
+		// Unknown short flag → error
+		if len(option) == 1 {
+			matrixErr = fmt.Errorf("unknown short flag %q", "-"+option)
+			return args, nil
+		}
+
+		// Resolve matrix key
+		key := option
+		if rest, ok := strings.CutPrefix(option, "matrix-"); ok {
+			if rest == "" {
+				matrixErr = fmt.Errorf("missing matrix key in --matrix-")
+				return args, nil
+			}
+			key = rest
+		}
+
+		if !matrixKeyRE.MatchString(key) {
+			matrixErr = fmt.Errorf("invalid matrix key %q", key)
+			return args, nil
 		}
 
 		// Resolve value
-		if !hasEq {
-			if i+1 >= len(subArgs) || strings.HasPrefix(subArgs[i+1], "-") {
-				return nil, fmt.Errorf("missing value for matrix flag --%s", name)
+		val, hasVal := arg.Value()
+		if !hasVal {
+			if len(args) == 0 {
+				matrixErr = fmt.Errorf("missing value for matrix flag --%s", option)
+				return args, nil
 			}
-			i++
-			val = subArgs[i]
+			val = args[0]
+			args = args[1:]
 		}
 		if val == "" {
-			return nil, fmt.Errorf("missing value for matrix flag --%s", name)
+			matrixErr = fmt.Errorf("missing value for matrix flag --%s", option)
+			return args, nil
 		}
-		dims[matrixKey] = val
+		dims[key] = val
+		return args, nil
 	}
 
+	parser.ParseArgs(subArgs)
+	if matrixErr != nil {
+		return nil, matrixErr
+	}
 	if len(dims) == 0 {
 		return nil, nil
 	}
