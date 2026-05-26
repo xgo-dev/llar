@@ -22,8 +22,9 @@ The build cache is consulted as usual: if the module has already been built
 with the same matrix, onBuild is skipped and onTest runs against the cached
 artifacts. On a cache miss, onBuild runs and its result is cached for later
 invocations before onTest executes.`,
-	Args: cobra.ExactArgs(1),
-	RunE: runTest,
+	Args:               cobra.ExactArgs(1),
+	FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
+	RunE:               runTest,
 }
 
 func init() {
@@ -45,7 +46,10 @@ func runTest(cmd *cobra.Command, args []string) error {
 	makeVerbose = testVerbose
 	defer func() { makeVerbose = savedVerbose }()
 
-	matrixStr := hostMatrixCombo()
+	matrixStr, err := resolveMatrixStr(cmd)
+	if err != nil {
+		return err
+	}
 
 	remoteStore, err := newRemoteStore()
 	if err != nil {

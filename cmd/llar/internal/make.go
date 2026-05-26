@@ -42,7 +42,8 @@ var makeCmd = &cobra.Command{
 	Short: "Build a module to FormulaDir",
 	Long:  `Make downloads and builds a module to FormulaDir.`,
 	Args:  cobra.ExactArgs(1),
-	RunE:  runMake,
+	FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
+	RunE:               runMake,
 }
 
 func init() {
@@ -68,7 +69,10 @@ func runMake(cmd *cobra.Command, args []string) error {
 		makeOutput = abs
 	}
 
-	matrixStr := hostMatrixCombo()
+	matrixStr, err := resolveMatrixStr(cmd)
+	if err != nil {
+		return err
+	}
 
 	// Set up remote formula store (always needed for deps)
 	remoteStore, err := newRemoteStore()

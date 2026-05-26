@@ -325,6 +325,11 @@ func runMakeCmd(t *testing.T, args ...string) (string, error) {
 	makeVerbose = true
 	makeOutput = ""
 
+	// Set os.Args to match what Cobra will see, so resolveMatrixStr works.
+	origArgs := os.Args
+	os.Args = append([]string{"llar", "make"}, args...)
+	defer func() { os.Args = origArgs }()
+
 	// Execute rootCmd in-process to keep test coverage. Because build output
 	// flows through process-wide os.Stdout (including nested cmake commands),
 	// redirect to a pipe and drain concurrently to avoid blocking on full pipe buffers.
