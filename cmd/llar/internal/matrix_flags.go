@@ -17,14 +17,8 @@ var matrixKeyRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.\-]*$`)
 // encoded matrix string. Falls back to hostMatrixCombo() when no
 // matrix flags are present.
 func resolveMatrixStr(cmd *cobra.Command) (string, error) {
-	startIdx := 0
-	for i, a := range os.Args {
-		if a == cmd.CalledAs() {
-			startIdx = i + 1
-			break
-		}
-	}
-	m, err := extractMatrixFlags(cmd, os.Args[startIdx:])
+	depth := len(strings.Fields(cmd.CommandPath()))
+	m, err := extractMatrixFlags(cmd, os.Args[depth:])
 	if err != nil {
 		return "", err
 	}
@@ -56,15 +50,13 @@ func extractMatrixFlags(cmd *cobra.Command, subArgs []string) (*formula.Matrix, 
 		}
 
 		// Known short flag → skip
-		if len(option) == 1 && cmd.Flags().ShorthandLookup(option) != nil {
-			if f := cmd.Flags().ShorthandLookup(option); f.NoOptDefVal == "" && len(args) > 0 {
-				return args[1:], nil
-			}
-			return args, nil
-		}
-
-		// Unknown short flag → error
 		if len(option) == 1 {
+			if f := cmd.Flags().ShorthandLookup(option); f != nil {
+				if f.NoOptDefVal == "" && len(args) > 0 {
+					return args[1:], nil
+				}
+				return args, nil
+			}
 			matrixErr = fmt.Errorf("unknown short flag %q", "-"+option)
 			return args, nil
 		}
