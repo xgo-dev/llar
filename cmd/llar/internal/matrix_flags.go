@@ -19,7 +19,7 @@ var matrixKeyRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.\-]*$`)
 func resolveMatrixStr(cmd *cobra.Command) (string, error) {
 	startIdx := 0
 	for i, a := range os.Args {
-		if a == cmd.Name() {
+		if a == cmd.CalledAs() {
 			startIdx = i + 1
 			break
 		}
