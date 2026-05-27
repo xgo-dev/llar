@@ -28,14 +28,17 @@ func resolveMatrixStr(cmd *cobra.Command) (string, error) {
 	return m.Combinations()[0], nil
 }
 
-// extractMatrixFlags uses go-flags to parse subArgs. All flags enter
-// UnknownOptionHandler; known flags (via cmd.Flags().Lookup) are
-// skipped, unknown long flags are collected as matrix dimensions.
+// extractMatrixFlags uses go-flags to parse registered matrix assignment flags
+// and collect unknown long flags as shortcut require dimensions.
 func extractMatrixFlags(cmd *cobra.Command, subArgs []string) (*formula.Matrix, error) {
-	dims := map[string]string{}
+	var opts struct {
+		Require []string `long:"require"`
+		Option  []string `long:"option"`
+	}
+	m := &formula.Matrix{}
 	var matrixErr error
 
-	parser := goflags.NewParser(&struct{}{}, goflags.PassDoubleDash)
+	parser := goflags.NewParser(&opts, goflags.PassDoubleDash)
 	parser.UnknownOptionHandler = func(option string, arg goflags.SplitArgument, args []string) ([]string, error) {
 		if matrixErr != nil {
 			return args, nil
@@ -61,21 +64,6 @@ func extractMatrixFlags(cmd *cobra.Command, subArgs []string) (*formula.Matrix, 
 			return args, nil
 		}
 
-		// Resolve matrix key
-		key := option
-		if rest, ok := strings.CutPrefix(option, "matrix-"); ok {
-			if rest == "" {
-				matrixErr = fmt.Errorf("missing matrix key in --matrix-")
-				return args, nil
-			}
-			key = rest
-		}
-
-		if !matrixKeyRE.MatchString(key) {
-			matrixErr = fmt.Errorf("invalid matrix key %q", key)
-			return args, nil
-		}
-
 		// Resolve value
 		val, hasVal := arg.Value()
 		if !hasVal {
@@ -90,23 +78,65 @@ func extractMatrixFlags(cmd *cobra.Command, subArgs []string) (*formula.Matrix, 
 			matrixErr = fmt.Errorf("missing value for matrix flag --%s", option)
 			return args, nil
 		}
-		dims[key] = val
+
+		if !matrixKeyRE.MatchString(option) {
+			matrixErr = fmt.Errorf("invalid matrix key %q", option)
+			return args, nil
+		}
+		if m.Require == nil {
+			m.Require = map[string][]string{}
+		}
+		m.Require[option] = []string{val}
 		return args, nil
 	}
 
-	parser.ParseArgs(subArgs)
+	_, err := parser.ParseArgs(subArgs)
+	if err != nil {
+		return nil, err
+	}
 	if matrixErr != nil {
 		return nil, matrixErr
 	}
-	if len(dims) == 0 {
-		return nil, nil
+
+	applyAssignments := func(flag string, assignments []string, target *map[string][]string) error {
+		for _, assignment := range assignments {
+			key, val, err := splitMatrixAssignment(flag, assignment)
+			if err != nil {
+				return err
+			}
+			if !matrixKeyRE.MatchString(key) {
+				return fmt.Errorf("invalid matrix key %q", key)
+			}
+			if *target == nil {
+				*target = map[string][]string{}
+			}
+			(*target)[key] = []string{val}
+		}
+		return nil
+	}
+	if err := applyAssignments("require", opts.Require, &m.Require); err != nil {
+		return nil, err
+	}
+	if err := applyAssignments("option", opts.Option, &m.Options); err != nil {
+		return nil, err
 	}
 
-	m := &formula.Matrix{
-		Require: make(map[string][]string, len(dims)),
-	}
-	for k, v := range dims {
-		m.Require[k] = []string{v}
+	if len(m.Require) == 0 && len(m.Options) == 0 {
+		return nil, nil
 	}
 	return m, nil
+}
+
+func splitMatrixAssignment(flag, assignment string) (string, string, error) {
+	key, val, ok := strings.Cut(assignment, "=")
+	if !ok {
+		return "", "", fmt.Errorf("invalid matrix assignment for --%s: expected key=value", flag)
+	}
+	if key == "" {
+		return "", "", fmt.Errorf("missing matrix key in --%s", flag)
+	}
+	if val == "" {
+		return "", "", fmt.Errorf("missing value for matrix flag --%s", flag)
+	}
+	return key, val, nil
 }
