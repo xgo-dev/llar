@@ -18,6 +18,8 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/modules"
+	"github.com/goplus/llar/mod/module"
 )
 
 func TestParseModuleArg(t *testing.T) {
@@ -311,7 +313,7 @@ func TestOutputResult_NestedDirs(t *testing.T) {
 // Integration tests that run the real `llar make` command.
 // Requires network, git, and cmake.
 
-func runMakeCmd(t *testing.T, args ...string) (string, error) {
+func runMakeCmdStreams(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 
 	// Save and restore cwd — builder.Build may os.Chdir during build
@@ -331,29 +333,88 @@ func runMakeCmd(t *testing.T, args ...string) (string, error) {
 	defer func() { os.Args = origArgs }()
 
 	// Execute rootCmd in-process to keep test coverage. Because build output
-	// flows through process-wide os.Stdout (including nested cmake commands),
-	// redirect to a pipe and drain concurrently to avoid blocking on full pipe buffers.
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	defer func() { os.Stdout = old }()
+	// flows through process-wide os.Stdout/os.Stderr (including nested build
+	// commands), redirect to pipes and drain concurrently to avoid blocking on
+	// full pipe buffers.
+	oldStdout := os.Stdout
+	stdoutR, stdoutW, _ := os.Pipe()
+	os.Stdout = stdoutW
+	defer func() { os.Stdout = oldStdout }()
 
-	var buf bytes.Buffer
-	copyDone := make(chan error, 1)
+	oldStderr := os.Stderr
+	stderrR, stderrW, _ := os.Pipe()
+	os.Stderr = stderrW
+	defer func() { os.Stderr = oldStderr }()
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutDone := make(chan error, 1)
 	go func() {
-		_, copyErr := io.Copy(&buf, r)
-		copyDone <- copyErr
+		_, copyErr := io.Copy(&stdoutBuf, stdoutR)
+		stdoutDone <- copyErr
+	}()
+	stderrDone := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(&stderrBuf, stderrR)
+		stderrDone <- copyErr
 	}()
 
 	cmd := rootCmd
 	cmd.SetArgs(append([]string{"make"}, args...))
 	err = cmd.Execute()
 
-	_ = w.Close()
-	if copyErr := <-copyDone; copyErr != nil {
+	_ = stdoutW.Close()
+	if copyErr := <-stdoutDone; copyErr != nil {
 		t.Fatalf("failed to capture stdout: %v", copyErr)
 	}
-	return buf.String(), err
+	_ = stderrW.Close()
+	if copyErr := <-stderrDone; copyErr != nil {
+		t.Fatalf("failed to capture stderr: %v", copyErr)
+	}
+	return stdoutBuf.String(), stderrBuf.String(), err
+}
+
+func runMakeCmd(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	stdout, _, err := runMakeCmdStreams(t, args...)
+	return stdout, err
+}
+
+func captureProcessStreams(t *testing.T) (*bytes.Buffer, *bytes.Buffer, func()) {
+	t.Helper()
+
+	oldStdout := os.Stdout
+	stdoutR, stdoutW, _ := os.Pipe()
+	os.Stdout = stdoutW
+
+	oldStderr := os.Stderr
+	stderrR, stderrW, _ := os.Pipe()
+	os.Stderr = stderrW
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutDone := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(&stdoutBuf, stdoutR)
+		stdoutDone <- copyErr
+	}()
+	stderrDone := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(&stderrBuf, stderrR)
+		stderrDone <- copyErr
+	}()
+
+	return &stdoutBuf, &stderrBuf, func() {
+		_ = stdoutW.Close()
+		if copyErr := <-stdoutDone; copyErr != nil {
+			t.Fatalf("failed to capture stdout: %v", copyErr)
+		}
+		os.Stdout = oldStdout
+
+		_ = stderrW.Close()
+		if copyErr := <-stderrDone; copyErr != nil {
+			t.Fatalf("failed to capture stderr: %v", copyErr)
+		}
+		os.Stderr = oldStderr
+	}
 }
 
 func TestMakeReal_Verbose(t *testing.T) {
@@ -679,6 +740,43 @@ func TestMakeLocal_BuildSuccess(t *testing.T) {
 	}
 	if string(data) != "testlib" {
 		t.Errorf("lib/liba.a content = %q, want %q", data, "testlib")
+	}
+}
+
+func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
+	formulaDir := setupLocalFormulas(t)
+	store := repo.New(formulaDir, &noopVCSRepo{})
+	ctx := context.Background()
+	mods, err := modules.Load(ctx, module.Version{Path: "test/liba", Version: "1.0.0"}, modules.Options{
+		FormulaStore: store,
+	})
+	if err != nil {
+		t.Fatalf("modules.Load() failed: %v", err)
+	}
+
+	makeVerbose = true
+
+	stdout, stderr, restore := captureProcessStreams(t)
+	restoreBuildOutput, err := redirectBuildOutput(mods)
+	if err != nil {
+		t.Fatalf("redirectBuildOutput() failed: %v", err)
+	}
+
+	var out formula.BuildResult
+	mods[0].OnBuild(nil, nil, &out)
+
+	restoreBuildOutput()
+	restore()
+
+	if out.Metadata() != "-lA" {
+		t.Fatalf("metadata = %q, want %q", out.Metadata(), "-lA")
+	}
+
+	if got := strings.TrimSpace(stdout.String()); got != "" {
+		t.Fatalf("stdout = %q, want no build output", got)
+	}
+	if !strings.Contains(stderr.String(), "verbose build output") {
+		t.Fatalf("stderr = %q, want verbose build output", stderr.String())
 	}
 }
 
