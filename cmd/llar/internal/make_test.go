@@ -805,67 +805,23 @@ func TestRedirectBuildOutput_SilentRestoresStreamsBeforeClosingDevNull(t *testin
 	os.Stdout = stdoutW
 	os.Stderr = stderrW
 
-	done := make(chan struct{})
-	errCh := make(chan error, 1)
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			default:
-				stdout := os.Stdout
-				if _, err := stdout.Write([]byte(".")); err != nil && stdout == os.Stdout {
-					errCh <- err
-					return
-				}
-				stderr := os.Stderr
-				if _, err := stderr.Write([]byte(".")); err != nil && stderr == os.Stderr {
-					errCh <- err
-					return
-				}
-			}
+	savedCloseDevNull := closeDevNull
+	closeDevNull = func(f *os.File) error {
+		if os.Stdout != stdoutW {
+			t.Fatalf("stdout was not restored before closing devnull")
 		}
-	}()
-
-	drainDone := make(chan struct{})
-	go func() {
-		done := make(chan struct{}, 2)
-		go func() {
-			_, _ = io.Copy(io.Discard, stdoutR)
-			done <- struct{}{}
-		}()
-		go func() {
-			_, _ = io.Copy(io.Discard, stderrR)
-			done <- struct{}{}
-		}()
-		<-done
-		<-done
-		close(drainDone)
-	}()
-
-	for i := 0; i < 10000; i++ {
-		restoreBuildOutput, err := redirectBuildOutput(nil)
-		if err != nil {
-			close(done)
-			t.Fatalf("redirectBuildOutput() failed: %v", err)
+		if os.Stderr != stderrW {
+			t.Fatalf("stderr was not restored before closing devnull")
 		}
-		restoreBuildOutput()
-
-		select {
-		case err := <-errCh:
-			close(done)
-			_ = stdoutW.Close()
-			_ = stderrW.Close()
-			<-drainDone
-			t.Fatalf("process stream write failed while restore was running: %v", err)
-		default:
-		}
+		return f.Close()
 	}
+	defer func() { closeDevNull = savedCloseDevNull }()
 
-	close(done)
-	_ = stdoutW.Close()
-	_ = stderrW.Close()
-	<-drainDone
+	restoreBuildOutput, err := redirectBuildOutput(nil)
+	if err != nil {
+		t.Fatalf("redirectBuildOutput() failed: %v", err)
+	}
+	restoreBuildOutput()
 }
 
 func TestBuildModule_SilentSuccess(t *testing.T) {

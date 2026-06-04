@@ -23,6 +23,7 @@ import (
 
 var makeVerbose bool
 var makeOutput string
+var closeDevNull = func(f *os.File) error { return f.Close() }
 
 // newRemoteStore creates the remote formula store. Overridable for testing.
 var newRemoteStore = func() (repo.Store, error) {
@@ -216,7 +217,7 @@ func redirectBuildOutput(mods []*modules.Module) (func(), error) {
 		return func() {
 			os.Stdout = savedStdout
 			os.Stderr = savedStderr
-			_ = devNull.Close()
+			_ = closeDevNull(devNull)
 		}, nil
 	}
 
