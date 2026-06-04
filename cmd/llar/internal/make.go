@@ -214,9 +214,9 @@ func redirectBuildOutput(mods []*modules.Module) (func(), error) {
 		os.Stdout = devNull
 		os.Stderr = devNull
 		return func() {
-			_ = devNull.Close()
 			os.Stdout = savedStdout
 			os.Stderr = savedStderr
+			_ = devNull.Close()
 		}, nil
 	}
 
