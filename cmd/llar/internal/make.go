@@ -38,10 +38,10 @@ var newRemoteStore = func() (repo.Store, error) {
 }
 
 var makeCmd = &cobra.Command{
-	Use:   "make [module@version]",
-	Short: "Build a module to FormulaDir",
-	Long:  `Make downloads and builds a module to FormulaDir.`,
-	Args:  cobra.ExactArgs(1),
+	Use:                "make [module@version]",
+	Short:              "Build a module to FormulaDir",
+	Long:               `Make downloads and builds a module to FormulaDir.`,
+	Args:               cobra.ExactArgs(1),
 	FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	RunE:               runMake,
 }
@@ -141,28 +141,16 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 		return fmt.Errorf("failed to load modules: %w", err)
 	}
 
-	// Handle verbose output
-	var savedStdout, savedStderr *os.File
-	if !makeVerbose {
-		for _, mod := range mods {
-			mod.SetStdout(io.Discard)
-			mod.SetStderr(io.Discard)
-		}
-
-		savedStdout = os.Stdout
-		savedStderr = os.Stderr
-		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-		if err != nil {
-			return fmt.Errorf("failed to open devnull: %w", err)
-		}
-		os.Stdout = devNull
-		os.Stderr = devNull
-		defer func() {
-			devNull.Close()
-			os.Stdout = savedStdout
-			os.Stderr = savedStderr
-		}()
+	restoreOutput, err := redirectBuildOutput(mods)
+	if err != nil {
+		return err
 	}
+	outputRestored := false
+	defer func() {
+		if !outputRestored {
+			restoreOutput()
+		}
+	}()
 
 	buildOpts := build.Options{
 		Store:     store,
@@ -188,11 +176,9 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 		return fmt.Errorf("failed to build %s@%s: %w", modPath, version, err)
 	}
 
-	// Restore stdout before printing results
-	if !makeVerbose {
-		os.Stdout = savedStdout
-		os.Stderr = savedStderr
-	}
+	// Restore stdout before printing results.
+	restoreOutput()
+	outputRestored = true
 
 	if len(results) > 0 {
 		main := results[len(results)-1]
@@ -207,6 +193,41 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 	}
 
 	return nil
+}
+
+// redirectBuildOutput reserves command stdout for final metadata. In verbose
+// mode, build stdout is redirected to stderr; in silent mode, build output is
+// discarded until the metadata line is printed.
+func redirectBuildOutput(mods []*modules.Module) (func(), error) {
+	if !makeVerbose {
+		for _, mod := range mods {
+			mod.SetStdout(io.Discard)
+			mod.SetStderr(io.Discard)
+		}
+
+		savedStdout := os.Stdout
+		savedStderr := os.Stderr
+		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open devnull: %w", err)
+		}
+		os.Stdout = devNull
+		os.Stderr = devNull
+		return func() {
+			os.Stdout = savedStdout
+			os.Stderr = savedStderr
+			_ = devNull.Close()
+		}, nil
+	}
+
+	savedStdout := os.Stdout
+	os.Stdout = os.Stderr
+	for _, mod := range mods {
+		mod.SetStdout(os.Stderr)
+	}
+	return func() {
+		os.Stdout = savedStdout
+	}, nil
 }
 
 // parseModuleArg parses a module argument and detects local filesystem patterns.

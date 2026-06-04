@@ -3,5 +3,6 @@ id "test/liba"
 fromVer "1.0.0"
 
 onBuild (ctx, proj, out) => {
+	println "verbose build output"
 	out.setMetadata "-lA"
 }
