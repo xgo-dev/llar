@@ -754,7 +754,9 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 		t.Fatalf("modules.Load() failed: %v", err)
 	}
 
+	savedVerbose := makeVerbose
 	makeVerbose = true
+	t.Cleanup(func() { makeVerbose = savedVerbose })
 
 	stdout, stderr, restore := captureProcessStreams(t)
 	restoreBuildOutput, err := redirectBuildOutput(mods)
