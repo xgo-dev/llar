@@ -1,0 +1,207 @@
+package upload
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
+	"github.com/google/go-containerregistry/pkg/v1/mutate"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/static"
+	"github.com/google/go-containerregistry/pkg/v1/types"
+)
+
+type GHCRConfig struct {
+	Owner string
+	Token string
+}
+
+func NewGHCR(cfg GHCRConfig) Uploader {
+	return ghcrUploader{
+		cfg:        cfg,
+		writeIndex: writeRemoteIndex,
+	}
+}
+
+type ghcrUploader struct {
+	cfg        GHCRConfig
+	writeIndex indexWriter
+}
+
+type indexWriter func(ctx context.Context, ref string, index v1.ImageIndex, username, token string) error
+
+func (ghcrUploader) Type() string {
+	return "ghcr"
+}
+
+func (u ghcrUploader) Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error) {
+	ref, err := parseGHCRName(opts.Name, u.cfg.Owner)
+	if err != nil {
+		return Result{}, err
+	}
+	archiveType := opts.Type
+	if archiveType == "" {
+		archiveType = "tar.gz"
+	}
+	layerType, err := layerMediaType(archiveType)
+	if err != nil {
+		return Result{}, err
+	}
+
+	offset, err := r.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return Result{}, err
+	}
+	payload, result, err := readPayload(r)
+	if err != nil {
+		return Result{}, err
+	}
+	if _, err := r.Seek(offset, io.SeekStart); err != nil {
+		return Result{}, err
+	}
+
+	index, err := buildIndex(payload, layerType, opts.Attrs)
+	if err != nil {
+		return Result{}, err
+	}
+	writeIndex := u.writeIndex
+	if writeIndex == nil {
+		writeIndex = writeRemoteIndex
+	}
+	if err := writeIndex(ctx, ref.String(), index, u.cfg.Owner, u.cfg.Token); err != nil {
+		return Result{}, err
+	}
+
+	result.URL = "https://ghcr.io/v2/" + ref.repo + "/blobs/sha256:" + result.Checksum
+	return result, nil
+}
+
+func checksumResult(r io.ReadSeeker) (Result, error) {
+	offset, err := r.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return Result{}, err
+	}
+	_, result, err := readPayload(r)
+	_, seekErr := r.Seek(offset, io.SeekStart)
+	if err != nil {
+		return Result{}, err
+	}
+	if seekErr != nil {
+		return Result{}, seekErr
+	}
+	return result, nil
+}
+
+func readPayload(r io.Reader) ([]byte, Result, error) {
+	payload, err := io.ReadAll(r)
+	if err != nil {
+		return nil, Result{}, err
+	}
+	sum := sha256.Sum256(payload)
+	return payload, Result{
+		Size:     int64(len(payload)),
+		Checksum: hex.EncodeToString(sum[:]),
+	}, nil
+}
+
+type ghcrRef struct {
+	repo string
+	tag  string
+}
+
+func (r ghcrRef) String() string {
+	return "ghcr.io/" + r.repo + ":" + r.tag
+}
+
+func parseGHCRName(rawName, owner string) (ghcrRef, error) {
+	rawName = strings.TrimSpace(strings.TrimPrefix(rawName, "ghcr.io/"))
+	if rawName == "" {
+		return ghcrRef{}, errors.New("ghcr name is required")
+	}
+	lastSlash := strings.LastIndex(rawName, "/")
+	lastColon := strings.LastIndex(rawName, ":")
+	if lastColon <= lastSlash || lastColon == len(rawName)-1 {
+		return ghcrRef{}, fmt.Errorf("ghcr name must include tag: %q", rawName)
+	}
+	repo := strings.Trim(rawName[:lastColon], "/")
+	tag := rawName[lastColon+1:]
+	if owner != "" {
+		owner = strings.Trim(owner, "/")
+		if repo != owner && !strings.HasPrefix(repo, owner+"/") {
+			repo = owner + "/" + repo
+		}
+	}
+	repo = strings.ToLower(repo)
+	if repo == "" || tag == "" {
+		return ghcrRef{}, fmt.Errorf("invalid ghcr name %q", rawName)
+	}
+	return ghcrRef{repo: repo, tag: tag}, nil
+}
+
+func layerMediaType(archiveType string) (types.MediaType, error) {
+	switch archiveType {
+	case "tar.gz":
+		return types.OCILayer, nil
+	case "tar.zst":
+		return types.OCILayerZStd, nil
+	default:
+		return "", fmt.Errorf("unsupported ghcr archive type %q", archiveType)
+	}
+}
+
+func buildIndex(payload []byte, layerType types.MediaType, attrs map[string]string) (v1.ImageIndex, error) {
+	layer := static.NewLayer(payload, layerType)
+	img, err := mutate.Append(empty.Image, mutate.Addendum{
+		Layer:     layer,
+		MediaType: layerType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	img = mutate.MediaType(img, types.OCIManifestSchema1)
+	return mutate.IndexMediaType(mutate.AppendManifests(empty.Index, mutate.IndexAddendum{
+		Add: img,
+		Descriptor: v1.Descriptor{
+			Annotations: map[string]string{
+				"org.llar.matrix": attrs["org.llar.matrix"],
+			},
+			Platform: platformFromAttrs(attrs),
+		},
+	}), types.OCIImageIndex), nil
+}
+
+func platformFromAttrs(attrs map[string]string) *v1.Platform {
+	if attrs["os"] == "" && attrs["arch"] == "" {
+		return nil
+	}
+	return &v1.Platform{
+		OS:           attrs["os"],
+		Architecture: attrs["arch"],
+	}
+}
+
+func writeRemoteIndex(ctx context.Context, ref string, index v1.ImageIndex, username, token string) error {
+	tag, err := name.NewTag(ref, name.WeakValidation)
+	if err != nil {
+		return err
+	}
+	opts := []remote.Option{remote.WithContext(ctx)}
+	if token != "" {
+		if username == "" {
+			username = "llar"
+		}
+		opts = append(opts, remote.WithAuth(authn.FromConfig(authn.AuthConfig{
+			Username: strings.ToLower(username),
+			Password: token,
+		})))
+	}
+	return remote.WriteIndex(tag, index, opts...)
+}
