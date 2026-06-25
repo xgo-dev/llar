@@ -1,0 +1,22 @@
+package upload
+
+import (
+	"context"
+	"io"
+)
+
+type Options struct {
+	Name  string
+	Type  string
+	Attrs map[string]string
+}
+
+type Result struct {
+	URL      string
+	Size     int64
+	Checksum string
+}
+
+type Uploader interface {
+	Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error)
+}
