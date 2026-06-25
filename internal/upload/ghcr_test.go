@@ -114,9 +114,6 @@ func TestGHCRUploaderWritesOCIIndexWithArtifactLayer(t *testing.T) {
 		t.Fatalf("layer digest = %q", layer.Digest)
 	}
 
-	if uploader.Type() != "ghcr" {
-		t.Fatalf("Type = %q, want ghcr", uploader.Type())
-	}
 	if got.URL != "https://ghcr.io/v2/example/madler/zlib/blobs/sha256:"+digest {
 		t.Fatalf("URL = %q", got.URL)
 	}

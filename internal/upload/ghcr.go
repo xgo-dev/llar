@@ -38,10 +38,6 @@ type ghcrUploader struct {
 
 type indexWriter func(ctx context.Context, ref string, index v1.ImageIndex, username, token string) error
 
-func (ghcrUploader) Type() string {
-	return "ghcr"
-}
-
 func (u ghcrUploader) Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error) {
 	ref, err := parseGHCRName(opts.Name, u.cfg.Owner)
 	if err != nil {

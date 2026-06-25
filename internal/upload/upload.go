@@ -18,6 +18,5 @@ type Result struct {
 }
 
 type Uploader interface {
-	Type() string
 	Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error)
 }
