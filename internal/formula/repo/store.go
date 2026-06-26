@@ -50,6 +50,11 @@ func (s *remoteStore) ModuleFS(ctx context.Context, modPath string) (fs.FS, erro
 
 	// Sync to the repository root directory, not the module directory.
 	// The vcs.Repo.Sync will create the module path structure within the destination.
+	unlock, err := lockedfile.MutexAt(filepath.Join(s.dir, ".sync.lock")).Lock()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	if err := s.vcsRepo.Sync(ctx, "", modPath, s.dir); err != nil {
 		return nil, err
 	}
