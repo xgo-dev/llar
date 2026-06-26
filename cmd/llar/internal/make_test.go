@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -127,6 +128,117 @@ func setupTestSrcDir(t *testing.T) string {
 	os.MkdirAll(filepath.Join(src, "include"), 0755)
 	os.WriteFile(filepath.Join(src, "include", "foo.h"), []byte("#pragma once"), 0644)
 	return src
+}
+
+func TestWriteArtifactMetadataWritesMetadataAndDeps(t *testing.T) {
+	installDir := t.TempDir()
+	metadata := fmt.Sprintf("-I%s -L%s -lz", filepath.Join(installDir, "include"), filepath.Join(installDir, "lib"))
+	deps := []module.Version{{Path: "madler/zlib", Version: "v1.3.1"}}
+
+	if err := writeArtifactMetadata(installDir, metadata, deps); err != nil {
+		t.Fatalf("writeArtifactMetadata: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(installDir, ".llar", "metadata.json"))
+	if err != nil {
+		t.Fatalf("read metadata.json: %v", err)
+	}
+	var got struct {
+		Metadata string   `json:"metadata"`
+		Deps     []string `json:"deps"`
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("metadata.json is invalid JSON: %v", err)
+	}
+	if got.Metadata != metadata {
+		t.Fatalf("metadata = %q, want %q", got.Metadata, metadata)
+	}
+	wantDeps := []string{"madler/zlib@v1.3.1"}
+	if !reflect.DeepEqual(got.Deps, wantDeps) {
+		t.Fatalf("deps = %+v, want %+v", got.Deps, wantDeps)
+	}
+}
+
+func TestWriteArtifactMetadataOmitsEmptyDeps(t *testing.T) {
+	installDir := t.TempDir()
+	if err := writeArtifactMetadata(installDir, "-lstandalone", nil); err != nil {
+		t.Fatalf("writeArtifactMetadata: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(installDir, ".llar", "metadata.json"))
+	if err != nil {
+		t.Fatalf("read metadata.json: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("metadata.json is invalid JSON: %v", err)
+	}
+	if _, ok := raw["metadata"]; !ok {
+		t.Fatal("metadata.json missing metadata field")
+	}
+	if _, ok := raw["deps"]; ok {
+		t.Fatalf("metadata.json contains deps for standalone artifact: %s", data)
+	}
+}
+
+func TestOutputArtifactCopiesMetadataDirectory(t *testing.T) {
+	src := setupTestSrcDir(t)
+	dest := filepath.Join(t.TempDir(), "out")
+
+	if err := outputArtifact(src, dest, "-lfoo", nil); err != nil {
+		t.Fatalf("outputArtifact: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dest, ".llar", "metadata.json"))
+	if err != nil {
+		t.Fatalf("read output metadata.json: %v", err)
+	}
+	var got artifactMetadata
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("metadata.json is invalid JSON: %v", err)
+	}
+	if got.Metadata != "-lfoo" {
+		t.Fatalf("metadata = %q, want %q", got.Metadata, "-lfoo")
+	}
+}
+
+func TestOutputArtifactZipsMetadataDirectory(t *testing.T) {
+	src := setupTestSrcDir(t)
+	dest := filepath.Join(t.TempDir(), "out.zip")
+
+	if err := outputArtifact(src, dest, "-lfoo", nil); err != nil {
+		t.Fatalf("outputArtifact: %v", err)
+	}
+
+	r, err := zip.OpenReader(dest)
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		if f.Name != ".llar/metadata.json" {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			t.Fatalf("open metadata entry: %v", err)
+		}
+		defer rc.Close()
+		data, err := io.ReadAll(rc)
+		if err != nil {
+			t.Fatalf("read metadata entry: %v", err)
+		}
+		var got artifactMetadata
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatalf("metadata.json is invalid JSON: %v", err)
+		}
+		if got.Metadata != "-lfoo" {
+			t.Fatalf("metadata = %q, want %q", got.Metadata, "-lfoo")
+		}
+		return
+	}
+	t.Fatal("zip missing .llar/metadata.json")
 }
 
 func TestOutputResult_CopyDir(t *testing.T) {
