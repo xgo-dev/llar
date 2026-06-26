@@ -7,10 +7,12 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -161,6 +163,65 @@ func TestStore_ModuleFS_InvalidModulePath(t *testing.T) {
 				t.Errorf("syncFn should not be called for invalid module path %q", modPath)
 			}
 		})
+	}
+}
+
+func TestStore_ModuleFS_SerializesSync(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	var mu sync.Mutex
+	inSync := 0
+	maxInSync := 0
+	syncCalls := 0
+	repo := &mockRepo{
+		syncFn: func(ctx context.Context, ref, path, localDir string) error {
+			mu.Lock()
+			inSync++
+			syncCalls++
+			maxInSync = max(maxInSync, inSync)
+			mu.Unlock()
+
+			time.Sleep(50 * time.Millisecond)
+
+			mu.Lock()
+			inSync--
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	store := New(tmpDir, repo)
+
+	const calls = 8
+	ready := make(chan struct{}, calls)
+	start := make(chan struct{})
+	errs := make(chan error, calls)
+	for i := range calls {
+		go func(i int) {
+			ready <- struct{}{}
+			<-start
+			_, err := store.ModuleFS(context.Background(), fmt.Sprintf("owner/mod%d", i))
+			errs <- err
+		}(i)
+	}
+	for range calls {
+		<-ready
+	}
+	close(start)
+
+	for range calls {
+		if err := <-errs; err != nil {
+			t.Fatalf("ModuleFS: %v", err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if syncCalls != calls {
+		t.Fatalf("sync calls = %d, want %d", syncCalls, calls)
+	}
+	if maxInSync != 1 {
+		t.Fatalf("max concurrent sync calls = %d, want 1", maxInSync)
 	}
 }
 
