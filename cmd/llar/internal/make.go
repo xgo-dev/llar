@@ -3,6 +3,7 @@ package internal
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"fmt"
 	stdbuild "go/build"
 	"io"
@@ -23,6 +24,11 @@ import (
 
 var makeVerbose bool
 var makeOutput string
+
+type artifactMetadata struct {
+	Metadata string   `json:"metadata"`
+	Deps     []string `json:"deps,omitempty"`
+}
 
 // newRemoteStore creates the remote formula store. Overridable for testing.
 var newRemoteStore = func() (repo.Store, error) {
@@ -186,7 +192,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 			fmt.Println(main.Metadata)
 		}
 		if makeOutput != "" {
-			if err := outputResult(main.OutputDir, makeOutput); err != nil {
+			if err := outputArtifact(main.OutputDir, makeOutput, main.Metadata, artifactDeps(mods)); err != nil {
 				return fmt.Errorf("failed to write output: %w", err)
 			}
 		}
@@ -255,6 +261,55 @@ func parseModuleArg(arg string) (pattern, version string, isLocal bool, err erro
 		}
 	}
 	return
+}
+
+func writeArtifactMetadata(installDir, metadata string, deps []module.Version) error {
+	body, err := json.MarshalIndent(artifactMetadata{
+		Metadata: metadata,
+		Deps:     artifactDepStrings(deps),
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	metaDir := filepath.Join(installDir, ".llar")
+	if err := os.MkdirAll(metaDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(metaDir, "metadata.json"), append(body, '\n'), 0o644)
+}
+
+func artifactDeps(mods []*modules.Module) []module.Version {
+	if len(mods) <= 1 {
+		return nil
+	}
+	deps := make([]module.Version, 0, len(mods)-1)
+	main := mods[0]
+	for _, mod := range mods[1:] {
+		if mod.Path == main.Path && mod.Version == main.Version {
+			continue
+		}
+		deps = append(deps, module.Version{Path: mod.Path, Version: mod.Version})
+	}
+	return deps
+}
+
+func artifactDepStrings(deps []module.Version) []string {
+	if len(deps) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(deps))
+	for _, dep := range deps {
+		out = append(out, dep.Path+"@"+dep.Version)
+	}
+	return out
+}
+
+func outputArtifact(srcDir, dest, metadata string, deps []module.Version) error {
+	if err := writeArtifactMetadata(srcDir, metadata, deps); err != nil {
+		return err
+	}
+	return outputResult(srcDir, dest)
 }
 
 // outputResult writes the build output to dest.
