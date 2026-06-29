@@ -21,15 +21,15 @@ func Pack(srcDir, dst string, metainfo json.RawMessage) error {
 		return fmt.Errorf("invalid artifact metainfo JSON")
 	}
 	if strings.HasSuffix(dst, ".zip") {
-		return packZip(srcDir, dst, metainfo)
+		return writeZipArtifact(srcDir, dst, metainfo)
 	}
 	if strings.HasSuffix(dst, ".tar.gz") {
-		return packTarGz(srcDir, dst, metainfo)
+		return writeTarGzArtifact(srcDir, dst, metainfo)
 	}
 	return fmt.Errorf("unsupported artifact output %q: use .zip or .tar.gz", dst)
 }
 
-func packZip(srcDir, dst string, metainfo json.RawMessage) error {
+func writeZipArtifact(srcDir, dst string, metainfo json.RawMessage) error {
 	f, err := os.Create(dst)
 	if err != nil {
 		return err
@@ -39,13 +39,13 @@ func packZip(srcDir, dst string, metainfo json.RawMessage) error {
 	w := zip.NewWriter(f)
 	defer w.Close()
 
-	if err := writeZipPayload(w, srcDir); err != nil {
+	if err := packZip(w, srcDir); err != nil {
 		return err
 	}
 	return writeZipMetadata(w, metainfo)
 }
 
-func writeZipPayload(w *zip.Writer, srcDir string) error {
+func packZip(w *zip.Writer, srcDir string) error {
 	add := func(path, name string, info os.FileInfo) error {
 		header, err := zip.FileInfoHeader(info)
 		if err != nil {
@@ -101,7 +101,7 @@ func writeZipMetadata(w *zip.Writer, metainfo json.RawMessage) error {
 	return err
 }
 
-func packTarGz(srcDir, dst string, metainfo json.RawMessage) error {
+func writeTarGzArtifact(srcDir, dst string, metainfo json.RawMessage) error {
 	f, err := os.Create(dst)
 	if err != nil {
 		return err
@@ -114,13 +114,13 @@ func packTarGz(srcDir, dst string, metainfo json.RawMessage) error {
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
 
-	if err := writeTarPayload(tw, srcDir); err != nil {
+	if err := packTar(tw, srcDir); err != nil {
 		return err
 	}
 	return writeTarMetadata(tw, metainfo)
 }
 
-func writeTarPayload(tw *tar.Writer, srcDir string) error {
+func packTar(tw *tar.Writer, srcDir string) error {
 	add := func(path, name string, info os.FileInfo) error {
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
