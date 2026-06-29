@@ -122,6 +122,52 @@ func TestParseModuleArg_InvalidDotVersion(t *testing.T) {
 	}
 }
 
+func TestRunMakeReturnsParseErrorBeforeStore(t *testing.T) {
+	origStore := newRemoteStore
+	storeCalled := false
+	newRemoteStore = func() (repo.Store, error) {
+		storeCalled = true
+		return nil, fmt.Errorf("unexpected store call")
+	}
+	defer func() { newRemoteStore = origStore }()
+
+	err := runMake(makeCmd, []string{".@latest"})
+	if err == nil {
+		t.Fatal("runMake error = nil, want parse error")
+	}
+	if !strings.Contains(err.Error(), "invalid local pattern") {
+		t.Fatalf("runMake error = %v, want invalid local pattern", err)
+	}
+	if storeCalled {
+		t.Fatal("newRemoteStore called after parse error")
+	}
+}
+
+func TestRunMakeReturnsMatrixErrorBeforeStore(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"llar", "make", "owner/repo@v1.0.0", "--os"}
+	defer func() { os.Args = origArgs }()
+
+	origStore := newRemoteStore
+	storeCalled := false
+	newRemoteStore = func() (repo.Store, error) {
+		storeCalled = true
+		return nil, fmt.Errorf("unexpected store call")
+	}
+	defer func() { newRemoteStore = origStore }()
+
+	err := runMake(makeCmd, []string{"owner/repo@v1.0.0"})
+	if err == nil {
+		t.Fatal("runMake error = nil, want matrix error")
+	}
+	if !strings.Contains(err.Error(), "missing value for matrix flag --os") {
+		t.Fatalf("runMake error = %v, want missing matrix value", err)
+	}
+	if storeCalled {
+		t.Fatal("newRemoteStore called after matrix error")
+	}
+}
+
 func setupTestSrcDir(t *testing.T) string {
 	t.Helper()
 	src := t.TempDir()
@@ -132,18 +178,14 @@ func setupTestSrcDir(t *testing.T) string {
 	return src
 }
 
-func TestWriteArtifactMetadataWritesMetadataAndDeps(t *testing.T) {
+func TestArtifactMetainfoWritesMetadataAndDeps(t *testing.T) {
 	installDir := t.TempDir()
 	metadata := fmt.Sprintf("-I%s -L%s -lz", filepath.Join(installDir, "include"), filepath.Join(installDir, "lib"))
 	deps := []module.Version{{Path: "madler/zlib", Version: "v1.3.1"}}
 
-	if err := writeArtifactMetadata(installDir, metadata, deps); err != nil {
-		t.Fatalf("writeArtifactMetadata: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(installDir, ".llar", "metadata.json"))
+	data, err := artifactMetainfo(metadata, deps)
 	if err != nil {
-		t.Fatalf("read metadata.json: %v", err)
+		t.Fatalf("artifactMetainfo: %v", err)
 	}
 	var got struct {
 		Metadata string   `json:"metadata"`
@@ -161,15 +203,10 @@ func TestWriteArtifactMetadataWritesMetadataAndDeps(t *testing.T) {
 	}
 }
 
-func TestWriteArtifactMetadataOmitsEmptyDeps(t *testing.T) {
-	installDir := t.TempDir()
-	if err := writeArtifactMetadata(installDir, "-lstandalone", nil); err != nil {
-		t.Fatalf("writeArtifactMetadata: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(installDir, ".llar", "metadata.json"))
+func TestArtifactMetainfoOmitsEmptyDeps(t *testing.T) {
+	data, err := artifactMetainfo("-lstandalone", nil)
 	if err != nil {
-		t.Fatalf("read metadata.json: %v", err)
+		t.Fatalf("artifactMetainfo: %v", err)
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -180,17 +217,6 @@ func TestWriteArtifactMetadataOmitsEmptyDeps(t *testing.T) {
 	}
 	if _, ok := raw["deps"]; ok {
 		t.Fatalf("metadata.json contains deps for standalone artifact: %s", data)
-	}
-}
-
-func TestWriteArtifactMetadataReturnsMkdirError(t *testing.T) {
-	installDir := filepath.Join(t.TempDir(), "install-file")
-	if err := os.WriteFile(installDir, []byte("not a directory"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := writeArtifactMetadata(installDir, "-lbad", nil); err == nil {
-		t.Fatal("writeArtifactMetadata error = nil, want mkdir error")
 	}
 }
 
@@ -299,7 +325,7 @@ func TestOutputArtifactTarGzMetadataDirectory(t *testing.T) {
 	}
 }
 
-func TestOutputArtifactReturnsMetadataError(t *testing.T) {
+func TestOutputArtifactReturnsPackError(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "install-file")
 	if err := os.WriteFile(src, []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
@@ -307,259 +333,7 @@ func TestOutputArtifactReturnsMetadataError(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "out")
 
 	if err := outputArtifact(src, dest, "-lbad", nil); err == nil {
-		t.Fatal("outputArtifact error = nil, want metadata error")
-	}
-}
-
-func TestOutputResult_CopyDir(t *testing.T) {
-	src := setupTestSrcDir(t)
-	dest := filepath.Join(t.TempDir(), "out")
-
-	if err := outputResult(src, dest); err != nil {
-		t.Fatalf("outputResult copy: %v", err)
-	}
-
-	// Verify files exist
-	for _, rel := range []string{"lib/libfoo.a", "include/foo.h"} {
-		path := filepath.Join(dest, rel)
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("missing %s: %v", rel, err)
-		}
-	}
-
-	// Verify content
-	data, err := os.ReadFile(filepath.Join(dest, "lib", "libfoo.a"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "archive" {
-		t.Errorf("content = %q, want %q", data, "archive")
-	}
-}
-
-func TestOutputResult_Zip(t *testing.T) {
-	src := setupTestSrcDir(t)
-	dest := filepath.Join(t.TempDir(), "out.zip")
-
-	if err := outputResult(src, dest); err != nil {
-		t.Fatalf("outputResult zip: %v", err)
-	}
-
-	// Open and verify zip contents
-	r, err := zip.OpenReader(dest)
-	if err != nil {
-		t.Fatalf("open zip: %v", err)
-	}
-	defer r.Close()
-
-	want := map[string]bool{
-		"lib/libfoo.a":  false,
-		"include/foo.h": false,
-	}
-	for _, f := range r.File {
-		if _, ok := want[f.Name]; ok {
-			want[f.Name] = true
-		}
-	}
-	for name, found := range want {
-		if !found {
-			t.Errorf("zip missing %s", name)
-		}
-	}
-}
-
-func TestOutputResult_ZipContent(t *testing.T) {
-	src := setupTestSrcDir(t)
-	dest := filepath.Join(t.TempDir(), "out.zip")
-
-	if err := outputResult(src, dest); err != nil {
-		t.Fatalf("outputResult zip: %v", err)
-	}
-
-	r, err := zip.OpenReader(dest)
-	if err != nil {
-		t.Fatalf("open zip: %v", err)
-	}
-	defer r.Close()
-
-	// Verify file content inside zip
-	for _, f := range r.File {
-		if f.Name == "lib/libfoo.a" {
-			rc, err := f.Open()
-			if err != nil {
-				t.Fatalf("open zip entry: %v", err)
-			}
-			data, _ := io.ReadAll(rc)
-			rc.Close()
-			if string(data) != "archive" {
-				t.Errorf("zip content of lib/libfoo.a = %q, want %q", data, "archive")
-			}
-		}
-	}
-}
-
-func TestOutputResult_TarGz(t *testing.T) {
-	src := setupTestSrcDir(t)
-	dest := filepath.Join(t.TempDir(), "out.tar.gz")
-
-	if err := outputResult(src, dest); err != nil {
-		t.Fatalf("outputResult tar.gz: %v", err)
-	}
-
-	files := readTarGz(t, dest)
-	if string(files["lib/libfoo.a"]) != "archive" {
-		t.Fatalf("tar.gz content of lib/libfoo.a = %q, want %q", files["lib/libfoo.a"], "archive")
-	}
-	if string(files["include/foo.h"]) != "#pragma once" {
-		t.Fatalf("tar.gz content of include/foo.h = %q, want %q", files["include/foo.h"], "#pragma once")
-	}
-}
-
-func TestOutputResult_EmptyDir(t *testing.T) {
-	src := t.TempDir() // empty directory
-
-	// Copy empty dir
-	destDir := filepath.Join(t.TempDir(), "empty-out")
-	if err := outputResult(src, destDir); err != nil {
-		t.Fatalf("outputResult copy empty dir: %v", err)
-	}
-	info, err := os.Stat(destDir)
-	if err != nil {
-		t.Fatalf("dest dir not created: %v", err)
-	}
-	if !info.IsDir() {
-		t.Error("dest should be a directory")
-	}
-
-	// Zip empty dir
-	destZip := filepath.Join(t.TempDir(), "empty.zip")
-	if err := outputResult(src, destZip); err != nil {
-		t.Fatalf("outputResult zip empty dir: %v", err)
-	}
-	r, err := zip.OpenReader(destZip)
-	if err != nil {
-		t.Fatalf("open zip: %v", err)
-	}
-	defer r.Close()
-	if len(r.File) != 0 {
-		t.Errorf("zip of empty dir has %d entries, want 0", len(r.File))
-	}
-}
-
-func TestOutputResult_InvalidSrc(t *testing.T) {
-	nonexistent := filepath.Join(t.TempDir(), "does-not-exist")
-
-	// Zip with invalid src
-	dest := filepath.Join(t.TempDir(), "bad.zip")
-	if err := outputResult(nonexistent, dest); err == nil {
-		t.Error("expected error for nonexistent src dir")
-	}
-
-	// Copy with invalid src
-	destDir := filepath.Join(t.TempDir(), "bad-out")
-	if err := outputResult(nonexistent, destDir); err == nil {
-		t.Error("expected error for nonexistent src dir")
-	}
-}
-
-func TestOutputResult_NestedDirs(t *testing.T) {
-	src := t.TempDir()
-	os.MkdirAll(filepath.Join(src, "a", "b", "c"), 0755)
-	os.WriteFile(filepath.Join(src, "a", "b", "c", "deep.txt"), []byte("deep"), 0644)
-	os.WriteFile(filepath.Join(src, "a", "top.txt"), []byte("top"), 0644)
-
-	// Test copy
-	destDir := filepath.Join(t.TempDir(), "nested-out")
-	if err := outputResult(src, destDir); err != nil {
-		t.Fatalf("outputResult copy nested: %v", err)
-	}
-	data, err := os.ReadFile(filepath.Join(destDir, "a", "b", "c", "deep.txt"))
-	if err != nil {
-		t.Fatalf("missing deep file: %v", err)
-	}
-	if string(data) != "deep" {
-		t.Errorf("deep.txt = %q, want %q", data, "deep")
-	}
-
-	// Test zip
-	destZip := filepath.Join(t.TempDir(), "nested.zip")
-	if err := outputResult(src, destZip); err != nil {
-		t.Fatalf("outputResult zip nested: %v", err)
-	}
-	r, err := zip.OpenReader(destZip)
-	if err != nil {
-		t.Fatalf("open zip: %v", err)
-	}
-	defer r.Close()
-
-	found := false
-	for _, f := range r.File {
-		if f.Name == filepath.Join("a", "b", "c", "deep.txt") {
-			found = true
-			rc, _ := f.Open()
-			data, _ := io.ReadAll(rc)
-			rc.Close()
-			if string(data) != "deep" {
-				t.Errorf("zip deep.txt = %q, want %q", data, "deep")
-			}
-		}
-	}
-	if !found {
-		t.Error("zip missing a/b/c/deep.txt")
-	}
-}
-
-func TestZipDirReturnsCreateError(t *testing.T) {
-	src := setupTestSrcDir(t)
-	dest := filepath.Join(t.TempDir(), "missing", "out.zip")
-	if err := zipDir(src, dest); err == nil {
-		t.Fatal("zipDir error = nil, want create error")
-	}
-}
-
-func TestZipDirReturnsWalkError(t *testing.T) {
-	src := filepath.Join(t.TempDir(), "missing")
-	dest := filepath.Join(t.TempDir(), "out.zip")
-	if err := zipDir(src, dest); err == nil {
-		t.Fatal("zipDir error = nil, want walk error")
-	}
-}
-
-func TestZipDirReturnsOpenError(t *testing.T) {
-	src := t.TempDir()
-	if err := os.Symlink(filepath.Join(src, "missing-target"), filepath.Join(src, "broken-link")); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-	dest := filepath.Join(t.TempDir(), "out.zip")
-	if err := zipDir(src, dest); err == nil {
-		t.Fatal("zipDir error = nil, want open error")
-	}
-}
-
-func TestTarGzDirReturnsCreateError(t *testing.T) {
-	src := setupTestSrcDir(t)
-	dest := filepath.Join(t.TempDir(), "missing", "out.tar.gz")
-	if err := tarGzDir(src, dest); err == nil {
-		t.Fatal("tarGzDir error = nil, want create error")
-	}
-}
-
-func TestTarGzDirReturnsWalkError(t *testing.T) {
-	src := filepath.Join(t.TempDir(), "missing")
-	dest := filepath.Join(t.TempDir(), "out.tar.gz")
-	if err := tarGzDir(src, dest); err == nil {
-		t.Fatal("tarGzDir error = nil, want walk error")
-	}
-}
-
-func TestTarGzDirReturnsOpenError(t *testing.T) {
-	src := t.TempDir()
-	if err := os.Symlink(filepath.Join(src, "missing-target"), filepath.Join(src, "broken-link")); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-	dest := filepath.Join(t.TempDir(), "out.tar.gz")
-	if err := tarGzDir(src, dest); err == nil {
-		t.Fatal("tarGzDir error = nil, want open error")
+		t.Fatal("outputArtifact error = nil, want pack error")
 	}
 }
 
@@ -915,7 +689,7 @@ func computeMatrixStr() string {
 
 // prepopulateCache writes a build cache entry so builder.Build returns
 // from cache without network access. Also creates the install dir with
-// a dummy lib/liba.a file for outputResult verification.
+// a dummy lib/liba.a file for output packaging verification.
 func prepopulateCache(t *testing.T, workspaceDir, modPath, version, matrixStr, metadata string) {
 	t.Helper()
 
@@ -947,7 +721,7 @@ func prepopulateCache(t *testing.T, workspaceDir, modPath, version, matrixStr, m
 		t.Fatal(err)
 	}
 
-	// Create install dir with a dummy file for outputResult
+	// Create install dir with a dummy file for output packaging.
 	installDir := filepath.Join(workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, version, matrixStr))
 	if err := os.MkdirAll(filepath.Join(installDir, "lib"), 0755); err != nil {
 		t.Fatal(err)
@@ -1123,7 +897,7 @@ func TestMakeLocal_BuildSuccessOutputZip(t *testing.T) {
 	// With -o flag, buildModule creates a fresh temp workspace (no cache).
 	// Build fails at git clone. Verify:
 	// 1. Error is a build error (module resolution succeeded)
-	// 2. Output zip was NOT created (build failed before outputResult)
+	// 2. Output zip was NOT created (build failed before output packaging)
 	dest := filepath.Join(t.TempDir(), "out.zip")
 	_, err := runMakeCmd(t, "-v", "-o", dest, "./@1.0.0")
 	if err == nil {

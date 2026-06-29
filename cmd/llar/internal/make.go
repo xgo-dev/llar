@@ -1,9 +1,6 @@
 package internal
 
 import (
-	"archive/tar"
-	"archive/zip"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/artifact/archiver"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
@@ -265,20 +263,15 @@ func parseModuleArg(arg string) (pattern, version string, isLocal bool, err erro
 	return
 }
 
-func writeArtifactMetadata(installDir, metadata string, deps []module.Version) error {
+func artifactMetainfo(metadata string, deps []module.Version) ([]byte, error) {
 	body, err := json.MarshalIndent(artifactMetadata{
 		Metadata: metadata,
 		Deps:     artifactDepStrings(deps),
 	}, "", "  ")
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	metaDir := filepath.Join(installDir, ".llar")
-	if err := os.MkdirAll(metaDir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(metaDir, "metadata.json"), append(body, '\n'), 0o644)
+	return append(body, '\n'), nil
 }
 
 func artifactDeps(mods []*modules.Module) []module.Version {
@@ -308,105 +301,9 @@ func artifactDepStrings(deps []module.Version) []string {
 }
 
 func outputArtifact(srcDir, dest, metadata string, deps []module.Version) error {
-	if err := writeArtifactMetadata(srcDir, metadata, deps); err != nil {
-		return err
-	}
-	return outputResult(srcDir, dest)
-}
-
-// outputResult writes the build output to dest.
-// If dest ends with ".zip" or ".tar.gz", creates an archive; otherwise copies the directory.
-func outputResult(srcDir, dest string) error {
-	if strings.HasSuffix(dest, ".zip") {
-		return zipDir(srcDir, dest)
-	}
-	if strings.HasSuffix(dest, ".tar.gz") {
-		return tarGzDir(srcDir, dest)
-	}
-	return os.CopyFS(dest, os.DirFS(srcDir))
-}
-
-func tarGzDir(srcDir, dest string) error {
-	f, err := os.Create(dest)
+	metainfo, err := artifactMetainfo(metadata, deps)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-
-	gz := gzip.NewWriter(f)
-	defer gz.Close()
-
-	w := tar.NewWriter(gz)
-	defer w.Close()
-
-	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		header.Name = filepath.ToSlash(rel)
-		if err := w.WriteHeader(header); err != nil {
-			return err
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		_, err = io.Copy(w, file)
-		return err
-	})
-}
-
-// zipDir creates a zip archive at dest from the contents of srcDir.
-func zipDir(srcDir, dest string) error {
-	f, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	w := zip.NewWriter(f)
-	defer w.Close()
-
-	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		header, err := zip.FileInfoHeader(info)
-		if err != nil {
-			return err
-		}
-		header.Name = rel
-		header.Method = zip.Deflate
-
-		writer, err := w.CreateHeader(header)
-		if err != nil {
-			return err
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		_, err = io.Copy(writer, file)
-		return err
-	})
+	return archiver.Pack(srcDir, dest, metainfo)
 }
