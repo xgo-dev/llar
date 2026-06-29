@@ -1,7 +1,9 @@
 package internal
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,7 +56,7 @@ var makeCmd = &cobra.Command{
 
 func init() {
 	makeCmd.Flags().BoolVarP(&makeVerbose, "verbose", "v", false, "Enable verbose build output")
-	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output path (directory or .zip file)")
+	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output path (directory, .zip file, or .tar.gz file)")
 	rootCmd.AddCommand(makeCmd)
 }
 
@@ -313,12 +315,57 @@ func outputArtifact(srcDir, dest, metadata string, deps []module.Version) error 
 }
 
 // outputResult writes the build output to dest.
-// If dest ends with ".zip", creates a zip archive; otherwise copies the directory.
+// If dest ends with ".zip" or ".tar.gz", creates an archive; otherwise copies the directory.
 func outputResult(srcDir, dest string) error {
 	if strings.HasSuffix(dest, ".zip") {
 		return zipDir(srcDir, dest)
 	}
+	if strings.HasSuffix(dest, ".tar.gz") {
+		return tarGzDir(srcDir, dest)
+	}
 	return os.CopyFS(dest, os.DirFS(srcDir))
+}
+
+func tarGzDir(srcDir, dest string) error {
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz := gzip.NewWriter(f)
+	defer gz.Close()
+
+	w := tar.NewWriter(gz)
+	defer w.Close()
+
+	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return err
+		}
+		header.Name = filepath.ToSlash(rel)
+		if err := w.WriteHeader(header); err != nil {
+			return err
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		_, err = io.Copy(w, file)
+		return err
+	})
 }
 
 // zipDir creates a zip archive at dest from the contents of srcDir.

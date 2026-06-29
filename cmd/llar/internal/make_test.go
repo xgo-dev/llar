@@ -1,8 +1,10 @@
 package internal
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -279,6 +281,24 @@ func TestOutputArtifactZipsMetadataDirectory(t *testing.T) {
 	t.Fatal("zip missing .llar/metadata.json")
 }
 
+func TestOutputArtifactTarGzMetadataDirectory(t *testing.T) {
+	src := setupTestSrcDir(t)
+	dest := filepath.Join(t.TempDir(), "out.tar.gz")
+
+	if err := outputArtifact(src, dest, "-lfoo", nil); err != nil {
+		t.Fatalf("outputArtifact: %v", err)
+	}
+
+	files := readTarGz(t, dest)
+	var got artifactMetadata
+	if err := json.Unmarshal(files[".llar/metadata.json"], &got); err != nil {
+		t.Fatalf("metadata.json is invalid JSON: %v", err)
+	}
+	if got.Metadata != "-lfoo" {
+		t.Fatalf("metadata = %q, want %q", got.Metadata, "-lfoo")
+	}
+}
+
 func TestOutputArtifactReturnsMetadataError(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "install-file")
 	if err := os.WriteFile(src, []byte("not a directory"), 0o644); err != nil {
@@ -375,6 +395,23 @@ func TestOutputResult_ZipContent(t *testing.T) {
 				t.Errorf("zip content of lib/libfoo.a = %q, want %q", data, "archive")
 			}
 		}
+	}
+}
+
+func TestOutputResult_TarGz(t *testing.T) {
+	src := setupTestSrcDir(t)
+	dest := filepath.Join(t.TempDir(), "out.tar.gz")
+
+	if err := outputResult(src, dest); err != nil {
+		t.Fatalf("outputResult tar.gz: %v", err)
+	}
+
+	files := readTarGz(t, dest)
+	if string(files["lib/libfoo.a"]) != "archive" {
+		t.Fatalf("tar.gz content of lib/libfoo.a = %q, want %q", files["lib/libfoo.a"], "archive")
+	}
+	if string(files["include/foo.h"]) != "#pragma once" {
+		t.Fatalf("tar.gz content of include/foo.h = %q, want %q", files["include/foo.h"], "#pragma once")
 	}
 }
 
@@ -496,6 +533,68 @@ func TestZipDirReturnsOpenError(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "out.zip")
 	if err := zipDir(src, dest); err == nil {
 		t.Fatal("zipDir error = nil, want open error")
+	}
+}
+
+func TestTarGzDirReturnsCreateError(t *testing.T) {
+	src := setupTestSrcDir(t)
+	dest := filepath.Join(t.TempDir(), "missing", "out.tar.gz")
+	if err := tarGzDir(src, dest); err == nil {
+		t.Fatal("tarGzDir error = nil, want create error")
+	}
+}
+
+func TestTarGzDirReturnsWalkError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "missing")
+	dest := filepath.Join(t.TempDir(), "out.tar.gz")
+	if err := tarGzDir(src, dest); err == nil {
+		t.Fatal("tarGzDir error = nil, want walk error")
+	}
+}
+
+func TestTarGzDirReturnsOpenError(t *testing.T) {
+	src := t.TempDir()
+	if err := os.Symlink(filepath.Join(src, "missing-target"), filepath.Join(src, "broken-link")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	dest := filepath.Join(t.TempDir(), "out.tar.gz")
+	if err := tarGzDir(src, dest); err == nil {
+		t.Fatal("tarGzDir error = nil, want open error")
+	}
+}
+
+func readTarGz(t *testing.T, path string) map[string][]byte {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open tar.gz: %v", err)
+	}
+	defer file.Close()
+
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatalf("gzip.NewReader: %v", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	files := map[string][]byte{}
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return files
+		}
+		if err != nil {
+			t.Fatalf("tar.Next: %v", err)
+		}
+		if header.FileInfo().IsDir() {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read %s: %v", header.Name, err)
+		}
+		files[header.Name] = data
 	}
 }
 
