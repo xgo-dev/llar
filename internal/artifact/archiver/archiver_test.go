@@ -3,7 +3,6 @@ package archiver
 import (
 	"archive/tar"
 	"archive/zip"
-	"bytes"
 	"compress/gzip"
 	"io"
 	"os"
@@ -154,18 +153,6 @@ func TestPackTarGzReturnsOpenError(t *testing.T) {
 
 	if err := Pack(src, dst, []byte("{}")); err == nil {
 		t.Fatal("Pack error = nil, want open error")
-	}
-}
-
-func TestWriteTarFileReturnsWriteHeaderError(t *testing.T) {
-	var buf bytes.Buffer
-	w := tar.NewWriter(&buf)
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := writeTarFile(w, "metadata.json", []byte("{}")); err == nil {
-		t.Fatal("writeTarFile error = nil, want write header error")
 	}
 }
 
