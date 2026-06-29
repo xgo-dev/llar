@@ -181,6 +181,44 @@ func TestWriteArtifactMetadataOmitsEmptyDeps(t *testing.T) {
 	}
 }
 
+func TestWriteArtifactMetadataReturnsMkdirError(t *testing.T) {
+	installDir := filepath.Join(t.TempDir(), "install-file")
+	if err := os.WriteFile(installDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeArtifactMetadata(installDir, "-lbad", nil); err == nil {
+		t.Fatal("writeArtifactMetadata error = nil, want mkdir error")
+	}
+}
+
+func TestArtifactDepsSkipsMainModule(t *testing.T) {
+	mods := []*modules.Module{
+		{Path: "owner/main", Version: "v1.0.0"},
+		{Path: "dep/a", Version: "v1.1.0"},
+		{Path: "owner/main", Version: "v1.0.0"},
+		{Path: "dep/b", Version: "v1.2.0"},
+	}
+
+	got := artifactDeps(mods)
+	want := []module.Version{
+		{Path: "dep/a", Version: "v1.1.0"},
+		{Path: "dep/b", Version: "v1.2.0"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("artifactDeps = %+v, want %+v", got, want)
+	}
+}
+
+func TestArtifactDepsStandalone(t *testing.T) {
+	if got := artifactDeps(nil); got != nil {
+		t.Fatalf("artifactDeps(nil) = %+v, want nil", got)
+	}
+	if got := artifactDeps([]*modules.Module{{Path: "owner/main", Version: "v1.0.0"}}); got != nil {
+		t.Fatalf("artifactDeps(single) = %+v, want nil", got)
+	}
+}
+
 func TestOutputArtifactCopiesMetadataDirectory(t *testing.T) {
 	src := setupTestSrcDir(t)
 	dest := filepath.Join(t.TempDir(), "out")
@@ -239,6 +277,18 @@ func TestOutputArtifactZipsMetadataDirectory(t *testing.T) {
 		return
 	}
 	t.Fatal("zip missing .llar/metadata.json")
+}
+
+func TestOutputArtifactReturnsMetadataError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "install-file")
+	if err := os.WriteFile(src, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "out")
+
+	if err := outputArtifact(src, dest, "-lbad", nil); err == nil {
+		t.Fatal("outputArtifact error = nil, want metadata error")
+	}
 }
 
 func TestOutputResult_CopyDir(t *testing.T) {
@@ -419,6 +469,33 @@ func TestOutputResult_NestedDirs(t *testing.T) {
 	}
 	if !found {
 		t.Error("zip missing a/b/c/deep.txt")
+	}
+}
+
+func TestZipDirReturnsCreateError(t *testing.T) {
+	src := setupTestSrcDir(t)
+	dest := filepath.Join(t.TempDir(), "missing", "out.zip")
+	if err := zipDir(src, dest); err == nil {
+		t.Fatal("zipDir error = nil, want create error")
+	}
+}
+
+func TestZipDirReturnsWalkError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "missing")
+	dest := filepath.Join(t.TempDir(), "out.zip")
+	if err := zipDir(src, dest); err == nil {
+		t.Fatal("zipDir error = nil, want walk error")
+	}
+}
+
+func TestZipDirReturnsOpenError(t *testing.T) {
+	src := t.TempDir()
+	if err := os.Symlink(filepath.Join(src, "missing-target"), filepath.Join(src, "broken-link")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	dest := filepath.Join(t.TempDir(), "out.zip")
+	if err := zipDir(src, dest); err == nil {
+		t.Fatal("zipDir error = nil, want open error")
 	}
 }
 

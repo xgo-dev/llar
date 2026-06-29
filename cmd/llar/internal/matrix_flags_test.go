@@ -43,6 +43,18 @@ func TestExtractMatrixFlags_KnownFlagsSkipped(t *testing.T) {
 	}
 }
 
+func TestExtractMatrixFlags_KnownShortValueFlagSkipped(t *testing.T) {
+	cmd := makeCmdForTest()
+	m, err := extractMatrixFlags(cmd, []string{"-o", "out", "-h", "--os=linux", "mod@v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := m.Combinations()[0]
+	if got != "linux" {
+		t.Fatalf("matrix = %q, want %q", got, "linux")
+	}
+}
+
 func TestExtractMatrixFlags_RequireFlag(t *testing.T) {
 	cmd := makeCmdForTest()
 	m, err := extractMatrixFlags(cmd, []string{"mod@v1", "--arch", "amd64", "--os", "linux", "--require", "output=custom", "--require=debug=true"})
@@ -119,6 +131,11 @@ func TestExtractMatrixFlags_MissingValueErrors(t *testing.T) {
 	_, err := extractMatrixFlags(cmd, []string{"mod@v1", "--os"})
 	if err == nil {
 		t.Fatal("expected error for missing value")
+	}
+
+	_, err = extractMatrixFlags(cmd, []string{"mod@v1", "--os="})
+	if err == nil {
+		t.Fatal("expected error for empty value")
 	}
 }
 
