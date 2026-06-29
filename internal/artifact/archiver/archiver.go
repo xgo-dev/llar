@@ -33,6 +33,8 @@ func packZip(srcDir, dst string, metainfo []byte) error {
 	defer f.Close()
 
 	w := zip.NewWriter(f)
+	defer w.Close()
+
 	if err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -67,7 +69,6 @@ func packZip(srcDir, dst string, metainfo []byte) error {
 		_, err = io.Copy(writer, file)
 		return err
 	}); err != nil {
-		_ = w.Close()
 		return err
 	}
 
@@ -78,14 +79,10 @@ func packZip(srcDir, dst string, metainfo []byte) error {
 	header.SetMode(0o644)
 	writer, err := w.CreateHeader(header)
 	if err != nil {
-		_ = w.Close()
 		return err
 	}
-	if _, err := writer.Write(metainfo); err != nil {
-		_ = w.Close()
-		return err
-	}
-	return w.Close()
+	_, err = writer.Write(metainfo)
+	return err
 }
 
 func packTarGz(srcDir, dst string, metainfo []byte) error {
@@ -96,7 +93,11 @@ func packTarGz(srcDir, dst string, metainfo []byte) error {
 	defer f.Close()
 
 	gz := gzip.NewWriter(f)
+	defer gz.Close()
+
 	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
 	if err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -128,8 +129,6 @@ func packTarGz(srcDir, dst string, metainfo []byte) error {
 		_, err = io.Copy(tw, file)
 		return err
 	}); err != nil {
-		_ = tw.Close()
-		_ = gz.Close()
 		return err
 	}
 
@@ -138,18 +137,8 @@ func packTarGz(srcDir, dst string, metainfo []byte) error {
 		Mode: 0o644,
 		Size: int64(len(metainfo)),
 	}); err != nil {
-		_ = tw.Close()
-		_ = gz.Close()
 		return err
 	}
-	if _, err := tw.Write(metainfo); err != nil {
-		_ = tw.Close()
-		_ = gz.Close()
-		return err
-	}
-	if err := tw.Close(); err != nil {
-		_ = gz.Close()
-		return err
-	}
-	return gz.Close()
+	_, err = tw.Write(metainfo)
+	return err
 }
