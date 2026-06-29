@@ -35,21 +35,7 @@ func packZip(srcDir, dst string, metainfo []byte) error {
 	w := zip.NewWriter(f)
 	defer w.Close()
 
-	if err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		name := filepath.ToSlash(rel)
-		if name == metadataPath {
-			return nil
-		}
+	addFile := func(path, name string, info os.FileInfo) error {
 		header, err := zip.FileInfoHeader(info)
 		if err != nil {
 			return err
@@ -68,7 +54,25 @@ func packZip(srcDir, dst string, metainfo []byte) error {
 		defer file.Close()
 		_, err = io.Copy(writer, file)
 		return err
-	}); err != nil {
+	}
+	walk := func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(rel)
+		if name == metadataPath {
+			return nil
+		}
+		return addFile(path, name, info)
+	}
+	if err := filepath.Walk(srcDir, walk); err != nil {
 		return err
 	}
 
@@ -98,21 +102,7 @@ func packTarGz(srcDir, dst string, metainfo []byte) error {
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
 
-	if err := filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		name := filepath.ToSlash(rel)
-		if name == metadataPath {
-			return nil
-		}
+	addFile := func(path, name string, info os.FileInfo) error {
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
@@ -128,7 +118,25 @@ func packTarGz(srcDir, dst string, metainfo []byte) error {
 		defer file.Close()
 		_, err = io.Copy(tw, file)
 		return err
-	}); err != nil {
+	}
+	walk := func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(rel)
+		if name == metadataPath {
+			return nil
+		}
+		return addFile(path, name, info)
+	}
+	if err := filepath.Walk(srcDir, walk); err != nil {
 		return err
 	}
 
