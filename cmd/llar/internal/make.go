@@ -1,8 +1,8 @@
 package internal
 
 import (
-	"archive/zip"
 	"context"
+	"encoding/json"
 	"fmt"
 	stdbuild "go/build"
 	"io"
@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/artifact/archiver"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
@@ -23,6 +24,11 @@ import (
 
 var makeVerbose bool
 var makeOutput string
+
+type artifactMetadata struct {
+	Metadata string   `json:"metadata"`
+	Deps     []string `json:"deps,omitempty"`
+}
 
 // newRemoteStore creates the remote formula store. Overridable for testing.
 var newRemoteStore = func() (repo.Store, error) {
@@ -48,7 +54,7 @@ var makeCmd = &cobra.Command{
 
 func init() {
 	makeCmd.Flags().BoolVarP(&makeVerbose, "verbose", "v", false, "Enable verbose build output")
-	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output path (directory or .zip file)")
+	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output archive path (.zip file or .tar.gz file)")
 	rootCmd.AddCommand(makeCmd)
 }
 
@@ -186,7 +192,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 			fmt.Println(main.Metadata)
 		}
 		if makeOutput != "" {
-			if err := outputResult(main.OutputDir, makeOutput); err != nil {
+			if err := outputArtifact(main.OutputDir, makeOutput, main.Metadata, artifactDeps(mods)); err != nil {
 				return fmt.Errorf("failed to write output: %w", err)
 			}
 		}
@@ -257,54 +263,39 @@ func parseModuleArg(arg string) (pattern, version string, isLocal bool, err erro
 	return
 }
 
-// outputResult writes the build output to dest.
-// If dest ends with ".zip", creates a zip archive; otherwise copies the directory.
-func outputResult(srcDir, dest string) error {
-	if strings.HasSuffix(dest, ".zip") {
-		return zipDir(srcDir, dest)
+func artifactDeps(mods []*modules.Module) []module.Version {
+	if len(mods) <= 1 {
+		return nil
 	}
-	return os.CopyFS(dest, os.DirFS(srcDir))
+	deps := make([]module.Version, 0, len(mods)-1)
+	main := mods[0]
+	for _, mod := range mods[1:] {
+		if mod.Path == main.Path && mod.Version == main.Version {
+			continue
+		}
+		deps = append(deps, module.Version{Path: mod.Path, Version: mod.Version})
+	}
+	return deps
 }
 
-// zipDir creates a zip archive at dest from the contents of srcDir.
-func zipDir(srcDir, dest string) error {
-	f, err := os.Create(dest)
+func artifactDepStrings(deps []module.Version) []string {
+	if len(deps) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(deps))
+	for _, dep := range deps {
+		out = append(out, dep.Path+"@"+dep.Version)
+	}
+	return out
+}
+
+func outputArtifact(srcDir, dest, metadata string, deps []module.Version) error {
+	body, err := json.MarshalIndent(artifactMetadata{
+		Metadata: metadata,
+		Deps:     artifactDepStrings(deps),
+	}, "", "  ")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-
-	w := zip.NewWriter(f)
-	defer w.Close()
-
-	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		header, err := zip.FileInfoHeader(info)
-		if err != nil {
-			return err
-		}
-		header.Name = rel
-		header.Method = zip.Deflate
-
-		writer, err := w.CreateHeader(header)
-		if err != nil {
-			return err
-		}
-		file, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		_, err = io.Copy(writer, file)
-		return err
-	})
+	return archiver.Pack(srcDir, dest, json.RawMessage(append(body, '\n')))
 }
