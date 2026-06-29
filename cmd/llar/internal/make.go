@@ -54,7 +54,7 @@ var makeCmd = &cobra.Command{
 
 func init() {
 	makeCmd.Flags().BoolVarP(&makeVerbose, "verbose", "v", false, "Enable verbose build output")
-	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output path (directory, .zip file, or .tar.gz file)")
+	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output archive path (.zip file or .tar.gz file)")
 	rootCmd.AddCommand(makeCmd)
 }
 

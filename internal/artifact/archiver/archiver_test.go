@@ -8,22 +8,23 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestPackDirectoryAddsMetadataAndPayload(t *testing.T) {
+func TestPackRejectsNonArchiveOutput(t *testing.T) {
 	src := setupSourceDir(t)
 	dst := filepath.Join(t.TempDir(), "out")
-	metainfo := []byte(`{"metadata":"-lfoo"}`)
 
-	if err := Pack(src, dst, metainfo); err != nil {
-		t.Fatalf("Pack: %v", err)
+	err := Pack(src, dst, []byte("{}"))
+	if err == nil {
+		t.Fatal("Pack error = nil, want unsupported output error")
 	}
-
-	assertFileContent(t, filepath.Join(dst, "lib", "libfoo.a"), "archive")
-	assertFileContent(t, filepath.Join(dst, ".llar", "metadata.json"), string(metainfo))
-	if _, err := os.Stat(filepath.Join(src, ".llar", "metadata.json")); !os.IsNotExist(err) {
-		t.Fatalf("Pack modified source metadata file: %v", err)
+	if !strings.Contains(err.Error(), "unsupported artifact output") {
+		t.Fatalf("Pack error = %v, want unsupported artifact output", err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("unsupported output created dst: %v", err)
 	}
 }
 
@@ -85,7 +86,7 @@ func TestPackOverwritesSourceMetadataInOutputOnly(t *testing.T) {
 	assertFileContent(t, filepath.Join(src, ".llar", "metadata.json"), "old")
 }
 
-func TestPackCopiesNestedDirectories(t *testing.T) {
+func TestPackTarGzIncludesNestedFiles(t *testing.T) {
 	src := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(src, "a", "b", "c"), 0o755); err != nil {
 		t.Fatal(err)
@@ -111,15 +112,6 @@ func TestPackReturnsCreateError(t *testing.T) {
 
 	if err := Pack(src, dst, []byte("{}")); err == nil {
 		t.Fatal("Pack error = nil, want create error")
-	}
-}
-
-func TestPackDirectoryReturnsCopyError(t *testing.T) {
-	src := filepath.Join(t.TempDir(), "missing")
-	dst := filepath.Join(t.TempDir(), "out")
-
-	if err := Pack(src, dst, []byte("{}")); err == nil {
-		t.Fatal("Pack error = nil, want copy error")
 	}
 }
 
@@ -162,17 +154,6 @@ func TestPackTarGzReturnsOpenError(t *testing.T) {
 
 	if err := Pack(src, dst, []byte("{}")); err == nil {
 		t.Fatal("Pack error = nil, want open error")
-	}
-}
-
-func TestWriteMetadataReturnsMkdirError(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "root-file")
-	if err := os.WriteFile(root, []byte("not a directory"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := writeMetadata(root, []byte("{}")); err == nil {
-		t.Fatal("writeMetadata error = nil, want mkdir error")
 	}
 }
 

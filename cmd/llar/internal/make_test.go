@@ -247,24 +247,16 @@ func TestArtifactDepsStandalone(t *testing.T) {
 	}
 }
 
-func TestOutputArtifactCopiesMetadataDirectory(t *testing.T) {
+func TestOutputArtifactRejectsNonArchiveOutput(t *testing.T) {
 	src := setupTestSrcDir(t)
 	dest := filepath.Join(t.TempDir(), "out")
 
-	if err := outputArtifact(src, dest, "-lfoo", nil); err != nil {
-		t.Fatalf("outputArtifact: %v", err)
+	err := outputArtifact(src, dest, "-lfoo", nil)
+	if err == nil {
+		t.Fatal("outputArtifact error = nil, want unsupported archive error")
 	}
-
-	data, err := os.ReadFile(filepath.Join(dest, ".llar", "metadata.json"))
-	if err != nil {
-		t.Fatalf("read output metadata.json: %v", err)
-	}
-	var got artifactMetadata
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("metadata.json is invalid JSON: %v", err)
-	}
-	if got.Metadata != "-lfoo" {
-		t.Fatalf("metadata = %q, want %q", got.Metadata, "-lfoo")
+	if !strings.Contains(err.Error(), "unsupported artifact output") {
+		t.Fatalf("outputArtifact error = %v, want unsupported artifact output", err)
 	}
 }
 
@@ -326,11 +318,8 @@ func TestOutputArtifactTarGzMetadataDirectory(t *testing.T) {
 }
 
 func TestOutputArtifactReturnsPackError(t *testing.T) {
-	src := filepath.Join(t.TempDir(), "install-file")
-	if err := os.WriteFile(src, []byte("not a directory"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	dest := filepath.Join(t.TempDir(), "out")
+	src := filepath.Join(t.TempDir(), "missing")
+	dest := filepath.Join(t.TempDir(), "out.zip")
 
 	if err := outputArtifact(src, dest, "-lbad", nil); err == nil {
 		t.Fatal("outputArtifact error = nil, want pack error")

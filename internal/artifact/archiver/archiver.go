@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -22,22 +23,7 @@ func Pack(srcDir, dst string, metainfo []byte) error {
 	if strings.HasSuffix(dst, ".tar.gz") {
 		return packTarGz(srcDir, dst, metainfo)
 	}
-	return packDir(srcDir, dst, metainfo)
-}
-
-func packDir(srcDir, dst string, metainfo []byte) error {
-	if err := os.CopyFS(dst, os.DirFS(srcDir)); err != nil {
-		return err
-	}
-	return writeMetadata(dst, metainfo)
-}
-
-func writeMetadata(root string, metainfo []byte) error {
-	path := filepath.Join(root, filepath.FromSlash(metadataPath))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, metainfo, 0o644)
+	return fmt.Errorf("unsupported artifact output %q: use .zip or .tar.gz", dst)
 }
 
 func packZip(srcDir, dst string, metainfo []byte) error {
