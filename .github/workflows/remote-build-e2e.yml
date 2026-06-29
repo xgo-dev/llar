@@ -22,8 +22,6 @@ jobs:
   remote-build-e2e:
     name: llar make -> GHCR -> Postgres
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
 
     services:
       postgres:
