@@ -178,48 +178,6 @@ func setupTestSrcDir(t *testing.T) string {
 	return src
 }
 
-func TestArtifactMetainfoWritesMetadataAndDeps(t *testing.T) {
-	installDir := t.TempDir()
-	metadata := fmt.Sprintf("-I%s -L%s -lz", filepath.Join(installDir, "include"), filepath.Join(installDir, "lib"))
-	deps := []module.Version{{Path: "madler/zlib", Version: "v1.3.1"}}
-
-	data, err := artifactMetainfo(metadata, deps)
-	if err != nil {
-		t.Fatalf("artifactMetainfo: %v", err)
-	}
-	var got struct {
-		Metadata string   `json:"metadata"`
-		Deps     []string `json:"deps"`
-	}
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("metadata.json is invalid JSON: %v", err)
-	}
-	if got.Metadata != metadata {
-		t.Fatalf("metadata = %q, want %q", got.Metadata, metadata)
-	}
-	wantDeps := []string{"madler/zlib@v1.3.1"}
-	if !reflect.DeepEqual(got.Deps, wantDeps) {
-		t.Fatalf("deps = %+v, want %+v", got.Deps, wantDeps)
-	}
-}
-
-func TestArtifactMetainfoOmitsEmptyDeps(t *testing.T) {
-	data, err := artifactMetainfo("-lstandalone", nil)
-	if err != nil {
-		t.Fatalf("artifactMetainfo: %v", err)
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("metadata.json is invalid JSON: %v", err)
-	}
-	if _, ok := raw["metadata"]; !ok {
-		t.Fatal("metadata.json missing metadata field")
-	}
-	if _, ok := raw["deps"]; ok {
-		t.Fatalf("metadata.json contains deps for standalone artifact: %s", data)
-	}
-}
-
 func TestArtifactDepsSkipsMainModule(t *testing.T) {
 	mods := []*modules.Module{
 		{Path: "owner/main", Version: "v1.0.0"},
@@ -263,8 +221,9 @@ func TestOutputArtifactRejectsNonArchiveOutput(t *testing.T) {
 func TestOutputArtifactZipsMetadataDirectory(t *testing.T) {
 	src := setupTestSrcDir(t)
 	dest := filepath.Join(t.TempDir(), "out.zip")
+	deps := []module.Version{{Path: "madler/zlib", Version: "v1.3.1"}}
 
-	if err := outputArtifact(src, dest, "-lfoo", nil); err != nil {
+	if err := outputArtifact(src, dest, "-lfoo", deps); err != nil {
 		t.Fatalf("outputArtifact: %v", err)
 	}
 
@@ -293,6 +252,10 @@ func TestOutputArtifactZipsMetadataDirectory(t *testing.T) {
 		}
 		if got.Metadata != "-lfoo" {
 			t.Fatalf("metadata = %q, want %q", got.Metadata, "-lfoo")
+		}
+		wantDeps := []string{"madler/zlib@v1.3.1"}
+		if !reflect.DeepEqual(got.Deps, wantDeps) {
+			t.Fatalf("deps = %+v, want %+v", got.Deps, wantDeps)
 		}
 		return
 	}

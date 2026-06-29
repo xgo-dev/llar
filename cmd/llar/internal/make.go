@@ -263,17 +263,6 @@ func parseModuleArg(arg string) (pattern, version string, isLocal bool, err erro
 	return
 }
 
-func artifactMetainfo(metadata string, deps []module.Version) ([]byte, error) {
-	body, err := json.MarshalIndent(artifactMetadata{
-		Metadata: metadata,
-		Deps:     artifactDepStrings(deps),
-	}, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(body, '\n'), nil
-}
-
 func artifactDeps(mods []*modules.Module) []module.Version {
 	if len(mods) <= 1 {
 		return nil
@@ -301,9 +290,12 @@ func artifactDepStrings(deps []module.Version) []string {
 }
 
 func outputArtifact(srcDir, dest, metadata string, deps []module.Version) error {
-	metainfo, err := artifactMetainfo(metadata, deps)
+	body, err := json.MarshalIndent(artifactMetadata{
+		Metadata: metadata,
+		Deps:     artifactDepStrings(deps),
+	}, "", "  ")
 	if err != nil {
 		return err
 	}
-	return archiver.Pack(srcDir, dest, metainfo)
+	return archiver.Pack(srcDir, dest, json.RawMessage(append(body, '\n')))
 }

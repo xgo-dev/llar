@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,7 +16,7 @@ func TestPackRejectsNonArchiveOutput(t *testing.T) {
 	src := setupSourceDir(t)
 	dst := filepath.Join(t.TempDir(), "out")
 
-	err := Pack(src, dst, []byte("{}"))
+	err := Pack(src, dst, json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("Pack error = nil, want unsupported output error")
 	}
@@ -27,10 +28,23 @@ func TestPackRejectsNonArchiveOutput(t *testing.T) {
 	}
 }
 
+func TestPackRejectsInvalidMetainfoJSON(t *testing.T) {
+	src := setupSourceDir(t)
+	dst := filepath.Join(t.TempDir(), "out.zip")
+
+	err := Pack(src, dst, json.RawMessage(`not json`))
+	if err == nil {
+		t.Fatal("Pack error = nil, want invalid JSON error")
+	}
+	if !strings.Contains(err.Error(), "invalid artifact metainfo JSON") {
+		t.Fatalf("Pack error = %v, want invalid artifact metainfo JSON", err)
+	}
+}
+
 func TestPackZipAddsMetadataAndPayload(t *testing.T) {
 	src := setupSourceDir(t)
 	dst := filepath.Join(t.TempDir(), "out.zip")
-	metainfo := []byte(`{"metadata":"-lfoo"}`)
+	metainfo := json.RawMessage(`{"metadata":"-lfoo"}`)
 
 	if err := Pack(src, dst, metainfo); err != nil {
 		t.Fatalf("Pack: %v", err)
@@ -48,7 +62,7 @@ func TestPackZipAddsMetadataAndPayload(t *testing.T) {
 func TestPackTarGzAddsMetadataAndPayload(t *testing.T) {
 	src := setupSourceDir(t)
 	dst := filepath.Join(t.TempDir(), "out.tar.gz")
-	metainfo := []byte(`{"metadata":"-lfoo"}`)
+	metainfo := json.RawMessage(`{"metadata":"-lfoo"}`)
 
 	if err := Pack(src, dst, metainfo); err != nil {
 		t.Fatalf("Pack: %v", err)
@@ -72,7 +86,7 @@ func TestPackOverwritesSourceMetadataInOutputOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "out.zip")
-	metainfo := []byte("new")
+	metainfo := json.RawMessage(`{"metadata":"new"}`)
 
 	if err := Pack(src, dst, metainfo); err != nil {
 		t.Fatalf("Pack: %v", err)
@@ -95,7 +109,7 @@ func TestPackTarGzIncludesNestedFiles(t *testing.T) {
 	}
 	dst := filepath.Join(t.TempDir(), "nested.tar.gz")
 
-	if err := Pack(src, dst, []byte("{}")); err != nil {
+	if err := Pack(src, dst, json.RawMessage(`{}`)); err != nil {
 		t.Fatalf("Pack: %v", err)
 	}
 
@@ -109,7 +123,7 @@ func TestPackReturnsCreateError(t *testing.T) {
 	src := setupSourceDir(t)
 	dst := filepath.Join(t.TempDir(), "missing", "out.zip")
 
-	if err := Pack(src, dst, []byte("{}")); err == nil {
+	if err := Pack(src, dst, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("Pack error = nil, want create error")
 	}
 }
@@ -118,7 +132,7 @@ func TestPackTarGzReturnsCreateError(t *testing.T) {
 	src := setupSourceDir(t)
 	dst := filepath.Join(t.TempDir(), "missing", "out.tar.gz")
 
-	if err := Pack(src, dst, []byte("{}")); err == nil {
+	if err := Pack(src, dst, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("Pack error = nil, want create error")
 	}
 }
@@ -127,7 +141,7 @@ func TestPackReturnsWalkError(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "missing")
 	dst := filepath.Join(t.TempDir(), "out.tar.gz")
 
-	if err := Pack(src, dst, []byte("{}")); err == nil {
+	if err := Pack(src, dst, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("Pack error = nil, want walk error")
 	}
 }
@@ -139,7 +153,7 @@ func TestPackReturnsOpenError(t *testing.T) {
 	}
 	dst := filepath.Join(t.TempDir(), "out.zip")
 
-	if err := Pack(src, dst, []byte("{}")); err == nil {
+	if err := Pack(src, dst, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("Pack error = nil, want open error")
 	}
 }
@@ -151,7 +165,7 @@ func TestPackTarGzReturnsOpenError(t *testing.T) {
 	}
 	dst := filepath.Join(t.TempDir(), "out.tar.gz")
 
-	if err := Pack(src, dst, []byte("{}")); err == nil {
+	if err := Pack(src, dst, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("Pack error = nil, want open error")
 	}
 }

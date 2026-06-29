@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -15,7 +16,10 @@ const metadataPath = ".llar/metadata.json"
 
 // Pack writes srcDir as an LLAR binary artifact at dst.
 // The metainfo bytes are written verbatim to .llar/metadata.json.
-func Pack(srcDir, dst string, metainfo []byte) error {
+func Pack(srcDir, dst string, metainfo json.RawMessage) error {
+	if !json.Valid(metainfo) {
+		return fmt.Errorf("invalid artifact metainfo JSON")
+	}
 	if strings.HasSuffix(dst, ".zip") {
 		return packZip(srcDir, dst, metainfo)
 	}
@@ -25,7 +29,7 @@ func Pack(srcDir, dst string, metainfo []byte) error {
 	return fmt.Errorf("unsupported artifact output %q: use .zip or .tar.gz", dst)
 }
 
-func packZip(srcDir, dst string, metainfo []byte) error {
+func packZip(srcDir, dst string, metainfo json.RawMessage) error {
 	f, err := os.Create(dst)
 	if err != nil {
 		return err
@@ -89,7 +93,7 @@ func packZip(srcDir, dst string, metainfo []byte) error {
 	return err
 }
 
-func packTarGz(srcDir, dst string, metainfo []byte) error {
+func packTarGz(srcDir, dst string, metainfo json.RawMessage) error {
 	f, err := os.Create(dst)
 	if err != nil {
 		return err
