@@ -57,7 +57,7 @@ jobs:
 
       - name: Run remote build E2E
         env:
-          GHCR_OWNER: ${{ vars.GHCR_OWNER || github.repository_owner }}
+          GHCR_OWNER: ${{ secrets.GHCR_OWNER || github.repository_owner }}
         run: >-
           go run ./testdata/remote-build-e2e
           --ghcr-owner "$GHCR_OWNER"

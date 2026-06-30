@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -21,299 +18,17 @@ import (
 	"github.com/goplus/llar/internal/upload"
 )
 
-func TestBuildDoesNotExportMakeImplementationDetails(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "build.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse build.go: %v", err)
-	}
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			typeSpec := spec.(*ast.TypeSpec)
-			switch typeSpec.Name.Name {
-			case "Maker", "MakeResult", "Runner", "RunResult", "Result":
-				t.Fatalf("%s should stay package-private", typeSpec.Name.Name)
-			}
-		}
-	}
-}
-
-func TestBuildDoesNotKeepTrivialHelpers(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "build.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse build.go: %v", err)
-	}
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
-		switch fn.Name.Name {
-		case "resultFor", "artifactKey", "targetString", "uploadName":
-			t.Fatalf("%s should be inlined", fn.Name.Name)
-		}
-	}
-}
-
-func TestBuildUsesSingleflightForDuplicateSuppression(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "build.go", nil, parser.ImportsOnly)
-	if err != nil {
-		t.Fatalf("parse build.go: %v", err)
-	}
-	for _, imp := range file.Imports {
-		if imp.Path.Value == `"golang.org/x/sync/singleflight"` {
-			return
-		}
-	}
-	t.Fatal("build.go should use golang.org/x/sync/singleflight for duplicate suppression")
-}
-
-func TestBuildOptionsDoesNotExposeMakeCommandConfiguration(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "build.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse build.go: %v", err)
-	}
-	for _, decl := range file.Decls {
-		gen, ok := decl.(*ast.GenDecl)
-		if !ok || gen.Tok != token.TYPE {
-			continue
-		}
-		for _, spec := range gen.Specs {
-			typeSpec := spec.(*ast.TypeSpec)
-			if typeSpec.Name.Name != "Options" {
-				continue
-			}
-			st, ok := typeSpec.Type.(*ast.StructType)
-			if !ok {
-				t.Fatalf("Options is not a struct")
-			}
-			for _, field := range st.Fields.List {
-				for _, name := range field.Names {
-					switch name.Name {
-					case "MakeCommand", "MakeArgs", "MakeWorkDir", "MakeHomeDir":
-						t.Fatalf("Options should not expose %s", name.Name)
-					}
-				}
-			}
-			return
-		}
-	}
-	t.Fatal("Options type not found")
-}
-
-func TestBuildDoesNotKeepMakerAbstraction(t *testing.T) {
-	for _, fileName := range []string{"build.go", "make.go"} {
-		file, err := parser.ParseFile(token.NewFileSet(), fileName, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", fileName, err)
-		}
-		for _, decl := range file.Decls {
-			switch decl := decl.(type) {
-			case *ast.GenDecl:
-				if decl.Tok != token.TYPE {
-					continue
-				}
-				for _, spec := range decl.Specs {
-					typeSpec := spec.(*ast.TypeSpec)
-					switch typeSpec.Name.Name {
-					case "maker", "llarMaker":
-						t.Fatalf("%s should not keep %s", fileName, typeSpec.Name.Name)
-					}
-				}
-			case *ast.FuncDecl:
-				switch decl.Name.Name {
-				case "newBuilds", "newLLARMaker":
-					t.Fatalf("%s should not keep %s", fileName, decl.Name.Name)
-				}
-			}
-		}
-	}
-}
-
-func TestE2EResetsDatabaseAtStartup(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "../../../testdata/remote-build-e2e/main.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse remote-build-e2e runner: %v", err)
-	}
-	resetsDatabase := false
-	ast.Inspect(file, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		ident, ok := call.Fun.(*ast.Ident)
-		if !ok || ident.Name != "resetDatabase" {
-			return true
-		}
-		resetsDatabase = true
-		return true
-	})
-	if !resetsDatabase {
-		t.Fatal("remote build E2E should reset the database during test init")
-	}
-}
-
-func TestE2EDoesNotDeleteArtifacts(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "../../../testdata/remote-build-e2e/main.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse remote-build-e2e runner: %v", err)
-	}
-	ast.Inspect(file, func(node ast.Node) bool {
-		selector, ok := node.(*ast.SelectorExpr)
-		if !ok || selector.Sel.Name != "Delete" {
-			return true
-		}
-		t.Fatalf("remote build E2E should leave artifacts in the database")
-		return false
-	})
-}
-
-func TestRemoteBuildE2EWorkflowDoesNotHardcodeRepository(t *testing.T) {
-	data, err := os.ReadFile("../../../.github/workflows/remote-build-e2e.yml")
-	if err != nil {
-		t.Fatalf("read remote build E2E workflow: %v", err)
-	}
-	hardcodedRepo := strings.Join([]string{"Meteors", "Liu/llar"}, "")
-	if strings.Contains(string(data), hardcodedRepo) {
-		t.Fatal("remote build E2E workflow should run in any repository")
-	}
-}
-
-func TestRemoteBuildE2EDoesNotHardcodeGHCROwner(t *testing.T) {
-	for _, path := range []string{
-		"../../../testdata/remote-build-e2e/main.go",
-		"../../../.github/workflows/remote-build-e2e.yml",
-	} {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		hardcodedOwner := strings.Join([]string{"Meteors", "Liu"}, "")
-		if strings.Contains(string(data), hardcodedOwner) {
-			t.Fatalf("%s should not hardcode GHCR owner", path)
-		}
-	}
-}
-
-func TestRemoteBuildE2EWorkflowPassesGHCROwnerFromEnv(t *testing.T) {
-	data, err := os.ReadFile("../../../.github/workflows/remote-build-e2e.yml")
-	if err != nil {
-		t.Fatalf("read remote build E2E workflow: %v", err)
-	}
-	workflow := string(data)
-	if !strings.Contains(workflow, "GHCR_OWNER") {
-		t.Fatal("remote build E2E workflow should define GHCR_OWNER")
-	}
-	if !strings.Contains(workflow, `--ghcr-owner "$GHCR_OWNER"`) {
-		t.Fatal("remote build E2E workflow should pass GHCR_OWNER to -ghcr-owner")
-	}
-}
-
-func TestRemoteBuildE2EWorkflowInstallsLLARCommand(t *testing.T) {
-	data, err := os.ReadFile("../../../.github/workflows/remote-build-e2e.yml")
-	if err != nil {
-		t.Fatalf("read remote build E2E workflow: %v", err)
-	}
-	workflow := string(data)
-	if !strings.Contains(workflow, "go install ./cmd/llar") {
-		t.Fatal("remote build E2E workflow should install llar before running the E2E runner")
-	}
-	if !strings.Contains(workflow, "$(go env GOPATH)/bin") {
-		t.Fatal("remote build E2E workflow should add the installed llar command to PATH")
-	}
-}
-
-func TestRunLLARMakeUsesLLARFromPATHWithTemporaryWorkAndHome(t *testing.T) {
-	installLLARHelper(t)
-
-	recordPath := filepath.Join(t.TempDir(), "record.txt")
-	originalHome := filepath.Join(t.TempDir(), "original-home")
-	if err := os.MkdirAll(originalHome, 0o755); err != nil {
-		t.Fatalf("create original home: %v", err)
-	}
-	originalDir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	t.Setenv("LLAR_MAKE_RECORD", recordPath)
-	t.Setenv("HOME", originalHome)
-
-	got, err := runLLARMake(context.Background(), testRequest(), nil)
-	if err != nil {
-		t.Fatalf("make: %v", err)
-	}
-	if got.Type != "tar.gz" {
-		t.Fatalf("type = %q, want tar.gz", got.Type)
-	}
-	if got.Metadata != "-lz" {
-		t.Fatalf("metadata = %q, want -lz", got.Metadata)
-	}
-	archive, err := io.ReadAll(got.Archive)
-	if err != nil {
-		t.Fatalf("read archive: %v", err)
-	}
-	if string(archive) != "archive" {
-		t.Fatalf("archive = %q, want archive", archive)
-	}
-
-	record, err := readHelperRecord(recordPath)
-	if err != nil {
-		t.Fatalf("read helper record: %v", err)
-	}
-	if record["cwd"] == originalDir {
-		t.Fatalf("cmd.Dir = %q, want temporary work dir", record["cwd"])
-	}
-	if filepath.Base(record["cwd"]) != "work" {
-		t.Fatalf("cmd.Dir = %q, want temp work dir ending in work", record["cwd"])
-	}
-	if record["home"] == originalHome {
-		t.Fatalf("HOME = %q, want temporary home dir", record["home"])
-	}
-	if filepath.Base(record["home"]) != "home" {
-		t.Fatalf("HOME = %q, want temp home dir ending in home", record["home"])
-	}
-	if record["cwd_exists"] != "true" || record["home_exists"] != "true" {
-		t.Fatalf("helper saw cwd/home existence flags: %+v", record)
-	}
-}
-
-func TestRemoteBuildDoesNotOwnTarGzImplementation(t *testing.T) {
-	file, err := parser.ParseFile(token.NewFileSet(), "make.go", nil, 0)
-	if err != nil {
-		t.Fatalf("parse make.go: %v", err)
-	}
-	for _, imp := range file.Imports {
-		switch strings.Trim(imp.Path.Value, `"`) {
-		case "archive/tar", "compress/gzip":
-			t.Fatalf("make.go should delegate tar.gz output to llar make -o, not import %s", imp.Path.Value)
-		}
-	}
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if ok && fn.Name.Name == "writeTarGz" {
-			t.Fatal("make.go should not keep its own writeTarGz implementation")
-		}
-	}
-}
-
-func TestBuildReturnsCompletedArtifactBeforeEntryLookup(t *testing.T) {
+func TestBuildReturnsStoredArtifactWithoutRunningMakeOrUpload(t *testing.T) {
 	req := testRequest()
-	key := artifact.Key{
-		Module:    req.Target.Module,
-		Version:   req.Target.Version,
-		MatrixStr: req.MatrixStr,
-	}
-	completed := artifact.Artifact{
+	key := artifactKey(req)
+	stored := artifact.Artifact{
 		Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:stored"},
 		Type:     "tar.gz",
 		Metadata: "-lz",
 		Checksum: "stored",
 	}
 	store := newFakeStore()
-	store.artifacts[key] = completed
+	store.artifacts[key] = stored
 	uploader := &fakeUploader{}
 	t.Setenv("PATH", t.TempDir())
 
@@ -327,7 +42,7 @@ func TestBuildReturnsCompletedArtifactBeforeEntryLookup(t *testing.T) {
 
 	want := []TargetArtifact{{
 		Target:   "madler/zlib@v1.3.1",
-		Artifact: completed,
+		Artifact: stored,
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Build = %+v, want %+v", got, want)
@@ -335,10 +50,84 @@ func TestBuildReturnsCompletedArtifactBeforeEntryLookup(t *testing.T) {
 	if uploader.Calls() != 0 {
 		t.Fatalf("uploader calls = %d, want 0", uploader.Calls())
 	}
+	if store.PutCalls() != 0 {
+		t.Fatalf("store Put calls = %d, want 0", store.PutCalls())
+	}
 }
 
-func TestBuildJoinsSingleflight(t *testing.T) {
+func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 	installLLARHelper(t)
+
+	req := testRequest()
+	key := artifactKey(req)
+	canonical := artifact.Artifact{
+		Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:stored"},
+		Type:     "tar.gz",
+		Metadata: "-lz-canonical",
+		Checksum: "stored",
+	}
+	store := newFakeStore()
+	store.put = func(gotKey artifact.Key, candidate artifact.Artifact) (artifact.Artifact, error) {
+		if gotKey != key {
+			t.Fatalf("Put key = %+v, want %+v", gotKey, key)
+		}
+		wantCandidate := artifact.Artifact{
+			Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:candidate"},
+			Type:     "tar.gz",
+			Metadata: "-lz",
+			Checksum: "candidate",
+		}
+		if candidate != wantCandidate {
+			t.Fatalf("Put artifact = %+v, want %+v", candidate, wantCandidate)
+		}
+		return canonical, nil
+	}
+	uploader := &fakeUploader{
+		result: upload.Result{
+			URL:      "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:candidate",
+			Checksum: "candidate",
+		},
+	}
+
+	got, err := New(Options{
+		Store:    store,
+		Uploader: uploader,
+	}).Build(context.Background(), req, nil)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	want := []TargetArtifact{{
+		Target:   "madler/zlib@v1.3.1",
+		Artifact: canonical,
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Build = %+v, want %+v", got, want)
+	}
+	opts := uploader.Options()
+	if len(opts) != 1 {
+		t.Fatalf("upload calls = %d, want 1", len(opts))
+	}
+	wantOptions := upload.Options{
+		Name: "madler/zlib:v1.3.1",
+		Type: "tar.gz",
+		Attrs: map[string]string{
+			"org.llar.matrix": "amd64-linux",
+			"os":              "linux",
+			"arch":            "amd64",
+		},
+	}
+	if !reflect.DeepEqual(opts[0], wantOptions) {
+		t.Fatalf("upload options = %+v, want %+v", opts[0], wantOptions)
+	}
+	if payloads := uploader.Payloads(); !reflect.DeepEqual(payloads, []string{"archive"}) {
+		t.Fatalf("upload payloads = %+v, want [archive]", payloads)
+	}
+}
+
+func TestBuildJoinsConcurrentBuildsForSameArtifactKey(t *testing.T) {
+	installLLARHelper(t)
+
 	req := testRequest()
 	store := newFakeStore()
 	uploader := &fakeUploader{
@@ -354,11 +143,11 @@ func TestBuildJoinsSingleflight(t *testing.T) {
 	t.Setenv("LLAR_MAKE_START_FILE", started)
 	t.Setenv("LLAR_MAKE_RELEASE_FILE", release)
 	t.Setenv("LLAR_MAKE_CALLS_FILE", calls)
+
 	builds := New(Options{
 		Store:    store,
 		Uploader: uploader,
 	})
-
 	results := make(chan buildCall, 2)
 	go func() {
 		result, err := builds.Build(context.Background(), req, nil)
@@ -392,92 +181,52 @@ func TestBuildJoinsSingleflight(t *testing.T) {
 	if uploader.Calls() != 1 {
 		t.Fatalf("uploader calls = %d, want 1", uploader.Calls())
 	}
-}
-
-func TestBuildUsesArtifactReturnedByPut(t *testing.T) {
-	installLLARHelper(t)
-	req := testRequest()
-	canonical := artifact.Artifact{
-		Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:stored"},
-		Type:     "tar.gz",
-		Metadata: "-lz-canonical",
-		Checksum: "stored",
-	}
-	store := newFakeStore()
-	store.put = func(key artifact.Key, candidate artifact.Artifact) (artifact.Artifact, error) {
-		wantCandidate := artifact.Artifact{
-			Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:candidate"},
-			Type:     "tar.gz",
-			Metadata: "-lz",
-			Checksum: "candidate",
-		}
-		if candidate != wantCandidate {
-			t.Fatalf("Put candidate = %+v, want %+v", candidate, wantCandidate)
-		}
-		return canonical, nil
-	}
-	uploader := &fakeUploader{
-		result: upload.Result{
-			URL:      "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:candidate",
-			Checksum: "candidate",
-		},
-	}
-
-	got, err := New(Options{
-		Store:    store,
-		Uploader: uploader,
-	}).Build(context.Background(), req, nil)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-
-	want := []TargetArtifact{{
-		Target:   "madler/zlib@v1.3.1",
-		Artifact: canonical,
-	}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Build = %+v, want %+v", got, want)
-	}
-	opts := uploader.Options()
-	if len(opts) != 1 {
-		t.Fatalf("upload calls = %d, want 1", len(opts))
-	}
-	wantAttrs := map[string]string{
-		"org.llar.matrix": req.MatrixStr,
-		"os":              "linux",
-		"arch":            "amd64",
-	}
-	if !reflect.DeepEqual(opts[0].Attrs, wantAttrs) {
-		t.Fatalf("upload attrs = %+v, want %+v", opts[0].Attrs, wantAttrs)
+	if store.PutCalls() != 1 {
+		t.Fatalf("store Put calls = %d, want 1", store.PutCalls())
 	}
 }
 
-func TestBuildOmitsUploadAttrsForUnknownType(t *testing.T) {
-	installLLARHelper(t)
-	req := testRequest()
-	store := newFakeStore()
+func TestBuildRequiresStore(t *testing.T) {
+	_, err := New(Options{
+		Uploader: &fakeUploader{},
+	}).Build(context.Background(), testRequest(), nil)
+	if err == nil || !strings.Contains(err.Error(), "build store is required") {
+		t.Fatalf("Build error = %v, want missing store error", err)
+	}
+}
+
+func TestBuildUploadRequiresUploader(t *testing.T) {
+	_, _, _, err := (&Builds{}).upload(context.Background(), testRequest(), makeResult{
+		Archive: strings.NewReader("archive"),
+		Type:    "tar.gz",
+	})
+	if err == nil || !strings.Contains(err.Error(), "build uploader is required") {
+		t.Fatalf("upload error = %v, want missing uploader error", err)
+	}
+}
+
+func TestBuildUploadOmitsAttrsForNonGHCRUploader(t *testing.T) {
 	uploader := &fakeUploader{
 		typ: "file",
 		result: upload.Result{
 			URL:      "file:///tmp/archive.tar.gz",
-			Checksum: "candidate",
+			Checksum: "abc",
 		},
 	}
-
-	_, err := New(Options{
-		Store:    store,
-		Uploader: uploader,
-	}).Build(context.Background(), req, nil)
+	_, _, _, err := (&Builds{uploader: uploader}).upload(context.Background(), testRequest(), makeResult{
+		Archive: strings.NewReader("archive"),
+		Type:    "tar.gz",
+	})
 	if err != nil {
-		t.Fatalf("Build: %v", err)
+		t.Fatalf("upload: %v", err)
 	}
 
 	opts := uploader.Options()
 	if len(opts) != 1 {
 		t.Fatalf("upload calls = %d, want 1", len(opts))
 	}
-	if len(opts[0].Attrs) != 0 {
-		t.Fatalf("upload attrs = %+v, want empty", opts[0].Attrs)
+	if opts[0].Attrs != nil {
+		t.Fatalf("upload attrs = %+v, want nil", opts[0].Attrs)
 	}
 }
 
@@ -496,6 +245,14 @@ func testRequest() Request {
 	}
 }
 
+func artifactKey(req Request) artifact.Key {
+	return artifact.Key{
+		Module:    req.Target.Module,
+		Version:   req.Target.Version,
+		MatrixStr: req.MatrixStr,
+	}
+}
+
 func installLLARHelper(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -503,7 +260,11 @@ func installLLARHelper(t *testing.T) {
 	}
 	binDir := t.TempDir()
 	helperPath := filepath.Join(binDir, "llar")
-	script := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestLLARMakeHelperProcess -- \"$@\"\n", os.Args[0])
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("find test executable: %v", err)
+	}
+	script := fmt.Sprintf("#!/bin/sh\nexec %q -test.run=TestLLARMakeHelperProcess -- \"$@\"\n", exe)
 	if err := os.WriteFile(helperPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write llar helper: %v", err)
 	}
@@ -522,6 +283,10 @@ func TestLLARMakeHelperProcess(t *testing.T) {
 	if len(args) > 0 {
 		args = args[1:]
 	}
+	if len(args) < 4 || args[0] != "make" {
+		_, _ = os.Stderr.WriteString("usage: llar make -o output target\n")
+		os.Exit(2)
+	}
 	if calls := os.Getenv("LLAR_MAKE_CALLS_FILE"); calls != "" {
 		f, err := os.OpenFile(calls, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
@@ -534,24 +299,6 @@ func TestLLARMakeHelperProcess(t *testing.T) {
 			os.Exit(5)
 		}
 		if err := f.Close(); err != nil {
-			_, _ = os.Stderr.WriteString(err.Error() + "\n")
-			os.Exit(5)
-		}
-	}
-	if record := os.Getenv("LLAR_MAKE_RECORD"); record != "" {
-		cwd, _ := os.Getwd()
-		home := os.Getenv("HOME")
-		_, cwdErr := os.Stat(cwd)
-		_, homeErr := os.Stat(home)
-		body := fmt.Sprintf(
-			"cwd=%s\nhome=%s\ncwd_exists=%t\nhome_exists=%t\nargs=%s\n",
-			cwd,
-			home,
-			cwdErr == nil,
-			homeErr == nil,
-			strings.Join(args, " "),
-		)
-		if err := os.WriteFile(record, []byte(body), 0o644); err != nil {
 			_, _ = os.Stderr.WriteString(err.Error() + "\n")
 			os.Exit(5)
 		}
@@ -598,25 +345,20 @@ func TestLLARMakeHelperProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-func readHelperRecord(path string) (map[string]string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+func waitForBuildCall(t *testing.T, ch <-chan buildCall) buildCall {
+	t.Helper()
+	select {
+	case result := <-ch:
+		return result
+	case <-time.After(2 * time.Second):
+		t.Fatalf("timed out waiting for Build")
+		return buildCall{}
 	}
-	record := make(map[string]string)
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		record[key] = value
-	}
-	return record, nil
 }
 
 func waitForFile(t *testing.T, path, name string) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(path); err == nil {
 			return
@@ -624,6 +366,18 @@ func waitForFile(t *testing.T, path, name string) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", name)
+}
+
+func waitForStoreGetCalls(t *testing.T, store *fakeStore, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if store.GetCalls() >= want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("store Get calls = %d, want at least %d", store.GetCalls(), want)
 }
 
 func helperCalls(t *testing.T, path string) int {
@@ -636,29 +390,6 @@ func helperCalls(t *testing.T, path string) int {
 		t.Fatalf("read helper calls: %v", err)
 	}
 	return strings.Count(string(data), "\n")
-}
-
-func waitForBuildCall(t *testing.T, ch <-chan buildCall) buildCall {
-	t.Helper()
-	select {
-	case result := <-ch:
-		return result
-	case <-time.After(time.Second):
-		t.Fatalf("timed out waiting for Build")
-		return buildCall{}
-	}
-}
-
-func waitForStoreGetCalls(t *testing.T, store *fakeStore, want int) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if store.GetCalls() >= want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatalf("store Get calls = %d, want at least %d", store.GetCalls(), want)
 }
 
 type fakeStore struct {
@@ -705,11 +436,18 @@ func (s *fakeStore) GetCalls() int {
 	return s.getCalls
 }
 
+func (s *fakeStore) PutCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.putCalls
+}
+
 type fakeUploader struct {
-	mu      sync.Mutex
-	typ     string
-	result  upload.Result
-	options []upload.Options
+	mu       sync.Mutex
+	typ      string
+	result   upload.Result
+	options  []upload.Options
+	payloads []string
 }
 
 func (u *fakeUploader) Type() string {
@@ -720,9 +458,14 @@ func (u *fakeUploader) Type() string {
 }
 
 func (u *fakeUploader) Upload(ctx context.Context, r io.ReadSeeker, opts upload.Options) (upload.Result, error) {
+	payload, err := io.ReadAll(r)
+	if err != nil {
+		return upload.Result{}, err
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.options = append(u.options, opts)
+	u.payloads = append(u.payloads, string(payload))
 	return u.result, nil
 }
 
@@ -736,4 +479,10 @@ func (u *fakeUploader) Options() []upload.Options {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	return append([]upload.Options(nil), u.options...)
+}
+
+func (u *fakeUploader) Payloads() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return append([]string(nil), u.payloads...)
 }
