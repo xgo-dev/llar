@@ -38,37 +38,23 @@ type makeResult struct {
 	Metadata string
 }
 
-type maker interface {
-	make(ctx context.Context, req Request, info io.Writer) (makeResult, error)
-}
-
 type Options struct {
 	Store       artifact.Store
 	Uploader    upload.Uploader
 	ArchiveType string
-	MakeCommand string
-	MakeArgs    []string
-	MakeWorkDir string
-	MakeHomeDir string
 }
 
 type Builds struct {
 	store       artifact.Store
 	uploader    upload.Uploader
-	maker       maker
 	archiveType string
 	flights     singleflight.Group
 }
 
 func New(opts Options) *Builds {
-	return newBuilds(opts, newLLARMaker(opts))
-}
-
-func newBuilds(opts Options, m maker) *Builds {
 	return &Builds{
 		store:       opts.Store,
 		uploader:    opts.Uploader,
-		maker:       m,
 		archiveType: opts.ArchiveType,
 	}
 }
@@ -120,10 +106,7 @@ func (b *Builds) makeUploadStore(ctx context.Context, req Request, key artifact.
 }
 
 func (b *Builds) make(ctx context.Context, req Request, info io.Writer) (makeResult, error) {
-	if b.maker == nil {
-		return makeResult{}, errors.New("build maker is required")
-	}
-	made, err := b.maker.make(ctx, req, info)
+	made, err := runLLARMake(ctx, req, info)
 	if err != nil {
 		return makeResult{}, fmt.Errorf("run build: %w", err)
 	}

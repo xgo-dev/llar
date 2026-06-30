@@ -50,8 +50,16 @@ jobs:
       - name: Download Go modules
         run: go mod download
 
+      - name: Install llar
+        run: |
+          go install ./cmd/llar
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Run remote build E2E
+        env:
+          GHCR_OWNER: ${{ vars.GHCR_OWNER || github.repository_owner }}
         run: >-
           go run ./testdata/remote-build-e2e
+          --ghcr-owner "$GHCR_OWNER"
           --ghcr-username "${{ secrets.GHCR_USERNAME || github.actor }}"
           --ghcr-token "${{ secrets.GHCR_TOKEN || github.token }}"

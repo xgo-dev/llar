@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -25,16 +24,14 @@ import (
 
 const (
 	defaultPostgresDSN   = "host=localhost port=5432 user=llar password=llar dbname=llar_e2e sslmode=disable"
-	defaultGHCROwner     = "MeteorsLiu"
 	defaultTarget        = "madler/zlib@v1.3.1"
 	defaultSharedTargets = "DaveGamble/cJSON@v1.7.18,pnggroup/libpng@v1.6.47"
 )
 
 func main() {
 	var cfg config
-	flag.StringVar(&cfg.repoRoot, "repo-root", ".", "repository root")
 	flag.StringVar(&cfg.postgresDSN, "postgres-dsn", defaultPostgresDSN, "Postgres DSN")
-	flag.StringVar(&cfg.ghcrOwner, "ghcr-owner", defaultGHCROwner, "GHCR owner")
+	flag.StringVar(&cfg.ghcrOwner, "ghcr-owner", "", "GHCR owner")
 	flag.StringVar(&cfg.ghcrUsername, "ghcr-username", "", "GHCR username")
 	flag.StringVar(&cfg.ghcrToken, "ghcr-token", "", "GHCR token")
 	flag.StringVar(&cfg.target, "target", defaultTarget, "target module@version")
@@ -54,7 +51,6 @@ func main() {
 }
 
 type config struct {
-	repoRoot      string
 	postgresDSN   string
 	ghcrOwner     string
 	ghcrUsername  string
@@ -66,11 +62,6 @@ type config struct {
 }
 
 func (c *config) validate() error {
-	var err error
-	c.repoRoot, err = filepath.Abs(c.repoRoot)
-	if err != nil {
-		return fmt.Errorf("resolve repo root: %w", err)
-	}
 	if strings.TrimSpace(c.postgresDSN) == "" {
 		return fmt.Errorf("missing required -postgres-dsn")
 	}
@@ -122,17 +113,6 @@ func run(cfg config) error {
 		return fmt.Errorf("artifact count after reset = %d, want 0", count)
 	}
 
-	runRoot, err := os.MkdirTemp("", "llar-remote-build-e2e-*")
-	if err != nil {
-		return fmt.Errorf("create E2E temp dir: %w", err)
-	}
-	defer os.RemoveAll(runRoot)
-
-	homeDir := filepath.Join(runRoot, "home")
-	if err := os.MkdirAll(homeDir, 0o755); err != nil {
-		return fmt.Errorf("create E2E home dir: %w", err)
-	}
-
 	target, err := parseTarget(cfg.target)
 	if err != nil {
 		return err
@@ -154,8 +134,6 @@ func run(cfg config) error {
 			target:        target,
 			matrixStr:     matrixStr,
 			sharedTargets: sharedTargets,
-			repoRoot:      cfg.repoRoot,
-			homeDir:       homeDir,
 		},
 		store: store,
 		db:    db,
@@ -170,7 +148,7 @@ func run(cfg config) error {
 		{"new builds instance uses persisted artifact cache", e2e.persistedCache},
 		{"different matrix stores independent artifact", e2e.differentMatrix},
 		{"concurrent duplicate build joins singleflight", e2e.concurrentDuplicate},
-		{"concurrent different targets sharing a dependency both complete", e2e.concurrentSharedDependency},
+		{"concurrent different targets both complete", e2e.concurrentDifferentTargets},
 	} {
 		start := time.Now()
 		log.Printf("RUN %s", step.name)
@@ -196,8 +174,6 @@ type configData struct {
 	target        remotebuild.Target
 	matrixStr     string
 	sharedTargets []remotebuild.Target
-	repoRoot      string
-	homeDir       string
 }
 
 type suite struct {
@@ -213,10 +189,7 @@ type suite struct {
 func (s *suite) coldBuild(ctx context.Context) error {
 	s.baseReq = requestForTarget(s.cfg.target, s.cfg.matrixStr)
 	s.baseUploader = newCountingUploader(s.cfg)
-	opts, err := s.buildOptions(s.baseUploader, s.cfg.repoRoot, s.cfg.homeDir)
-	if err != nil {
-		return err
-	}
+	opts := s.buildOptions(s.baseUploader)
 	s.baseBuilds = remotebuild.New(opts)
 
 	var info bytes.Buffer
@@ -256,10 +229,7 @@ func (s *suite) repeatedBuild(ctx context.Context) error {
 
 func (s *suite) persistedCache(ctx context.Context) error {
 	uploader := newCountingUploader(s.cfg)
-	opts, err := s.buildOptions(uploader, s.cfg.repoRoot, s.cfg.homeDir)
-	if err != nil {
-		return err
-	}
+	opts := s.buildOptions(uploader)
 	builds := remotebuild.New(opts)
 	got, err := builds.Build(ctx, s.baseReq, nil)
 	if err != nil {
@@ -277,10 +247,7 @@ func (s *suite) persistedCache(ctx context.Context) error {
 func (s *suite) differentMatrix(ctx context.Context) error {
 	req := requestForTarget(s.cfg.target, s.cfg.matrixStr+"-variant")
 	uploader := newCountingUploader(s.cfg)
-	opts, err := s.buildOptions(uploader, s.cfg.repoRoot, s.cfg.homeDir)
-	if err != nil {
-		return err
-	}
+	opts := s.buildOptions(uploader)
 	builds := remotebuild.New(opts)
 	got, err := builds.Build(ctx, req, nil)
 	if err != nil {
@@ -301,10 +268,7 @@ func (s *suite) differentMatrix(ctx context.Context) error {
 func (s *suite) concurrentDuplicate(ctx context.Context) error {
 	req := requestForTarget(s.cfg.target, s.cfg.matrixStr+"-concurrent")
 	uploader := newCountingUploader(s.cfg)
-	opts, err := s.buildOptions(uploader, s.cfg.repoRoot, s.cfg.homeDir)
-	if err != nil {
-		return err
-	}
+	opts := s.buildOptions(uploader)
 	builds := remotebuild.New(opts)
 
 	results := make(chan buildResult, 2)
@@ -344,23 +308,9 @@ func (s *suite) concurrentDuplicate(ctx context.Context) error {
 	return assertStoredArtifact(ctx, s.store, req, first.artifacts[0].Artifact)
 }
 
-func (s *suite) concurrentSharedDependency(ctx context.Context) error {
-	workspace, err := prepareSharedDependencyWorkspace(s.cfg.repoRoot, s.cfg.sharedTargets)
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(workspace)
-	sharedHome, err := os.MkdirTemp("", "llar-remote-build-shared-home-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(sharedHome)
-
+func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
 	uploader := newCountingUploader(s.cfg)
-	opts, err := s.buildOptions(uploader, workspace, sharedHome)
-	if err != nil {
-		return err
-	}
+	opts := s.buildOptions(uploader)
 	builds := remotebuild.New(opts)
 	matrixStr := s.cfg.matrixStr + "-shareddep"
 
@@ -410,19 +360,11 @@ func (s *suite) concurrentSharedDependency(ctx context.Context) error {
 	return nil
 }
 
-func (s *suite) buildOptions(uploader upload.Uploader, workDir, homeDir string) (remotebuild.Options, error) {
-	args, err := goRunLLARArgs(s.cfg.repoRoot, workDir)
-	if err != nil {
-		return remotebuild.Options{}, err
-	}
+func (s *suite) buildOptions(uploader upload.Uploader) remotebuild.Options {
 	return remotebuild.Options{
-		Store:       s.store,
-		Uploader:    uploader,
-		MakeCommand: "go",
-		MakeArgs:    args,
-		MakeWorkDir: workDir,
-		MakeHomeDir: homeDir,
-	}, nil
+		Store:    s.store,
+		Uploader: uploader,
+	}
 }
 
 func resetDatabase(ctx context.Context, db *gorm.DB) error {
@@ -481,54 +423,6 @@ func parseTargets(value string) ([]remotebuild.Target, error) {
 	return targets, nil
 }
 
-func prepareSharedDependencyWorkspace(repoRoot string, targets []remotebuild.Target) (string, error) {
-	root, err := os.MkdirTemp(filepath.Join(repoRoot, "testdata"), "remote-build-shared-*")
-	if err != nil {
-		return "", err
-	}
-	for _, target := range targets {
-		dir := filepath.Join(root, filepath.FromSlash(target.Module))
-		if err := os.MkdirAll(filepath.Join(dir, "1.0.0"), 0o755); err != nil {
-			os.RemoveAll(root)
-			return "", fmt.Errorf("create local formula dir: %w", err)
-		}
-		versionsJSON := fmt.Sprintf("{\n\t%q: %q,\n\t%q: {}\n}\n", "path", target.Module, "deps")
-		if err := os.WriteFile(filepath.Join(dir, "versions.json"), []byte(versionsJSON), 0o644); err != nil {
-			os.RemoveAll(root)
-			return "", fmt.Errorf("write versions.json: %w", err)
-		}
-		formula := fmt.Sprintf(`import "os"
-
-id %q
-
-fromVer "1.0.0"
-
-onRequire (proj, deps) => {
-	deps.require "madler/zlib", "v1.3.1"
-}
-
-onBuild (ctx, proj, out) => {
-	installDir, err := ctx.outputDir()
-	if err != nil {
-		out.addErr err
-		return
-	}
-	err = os.writeFile(installDir+"/remote-build-e2e.txt", []byte(%q), 0o644)
-	if err != nil {
-		out.addErr err
-		return
-	}
-	out.setMetadata %q
-}
-`, target.Module, target.Module+"@"+target.Version, "-l"+strings.ReplaceAll(target.Module, "/", "-"))
-		if err := os.WriteFile(filepath.Join(dir, "1.0.0", "Module_llar.gox"), []byte(formula), 0o644); err != nil {
-			os.RemoveAll(root)
-			return "", fmt.Errorf("write formula: %w", err)
-		}
-	}
-	return root, nil
-}
-
 func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remotebuild.TargetArtifact) error {
 	if len(got) != 1 {
 		return fmt.Errorf("artifact count = %d, want 1: %+v", len(got), got)
@@ -585,19 +479,6 @@ func assertStoredArtifact(ctx context.Context, store artifact.Store, req remoteb
 		return fmt.Errorf("stored artifact = %+v, want %+v", got, want)
 	}
 	return nil
-}
-
-func goRunLLARArgs(repoRoot, workDir string) ([]string, error) {
-	mainDir := filepath.Join(repoRoot, "cmd", "llar")
-	rel, err := filepath.Rel(workDir, mainDir)
-	if err != nil {
-		return nil, fmt.Errorf("resolve llar command path: %w", err)
-	}
-	rel = filepath.ToSlash(rel)
-	if !strings.HasPrefix(rel, ".") {
-		rel = "./" + rel
-	}
-	return []string{"run", "-ldflags=-checklinkname=0", rel}, nil
 }
 
 func hostMatrixStr() string {
