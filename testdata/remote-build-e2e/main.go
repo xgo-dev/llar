@@ -35,6 +35,7 @@ func main() {
 	flag.StringVar(&cfg.repoRoot, "repo-root", ".", "repository root")
 	flag.StringVar(&cfg.postgresDSN, "postgres-dsn", defaultPostgresDSN, "Postgres DSN")
 	flag.StringVar(&cfg.ghcrOwner, "ghcr-owner", defaultGHCROwner, "GHCR owner")
+	flag.StringVar(&cfg.ghcrUsername, "ghcr-username", "", "GHCR username")
 	flag.StringVar(&cfg.ghcrToken, "ghcr-token", "", "GHCR token")
 	flag.StringVar(&cfg.target, "target", defaultTarget, "target module@version")
 	flag.StringVar(&cfg.sharedTargets, "shared-targets", defaultSharedTargets, "comma-separated module@version targets sharing a dependency")
@@ -56,6 +57,7 @@ type config struct {
 	repoRoot      string
 	postgresDSN   string
 	ghcrOwner     string
+	ghcrUsername  string
 	ghcrToken     string
 	target        string
 	sharedTargets string
@@ -74,6 +76,9 @@ func (c *config) validate() error {
 	}
 	if strings.TrimSpace(c.ghcrOwner) == "" {
 		return fmt.Errorf("missing required -ghcr-owner")
+	}
+	if strings.TrimSpace(c.ghcrUsername) == "" {
+		return fmt.Errorf("missing required -ghcr-username")
 	}
 	if strings.TrimSpace(c.ghcrToken) == "" {
 		return fmt.Errorf("missing required -ghcr-token")
@@ -144,6 +149,7 @@ func run(cfg config) error {
 		cfg: configData{
 			postgresDSN:   cfg.postgresDSN,
 			ghcrOwner:     cfg.ghcrOwner,
+			ghcrUsername:  cfg.ghcrUsername,
 			ghcrToken:     cfg.ghcrToken,
 			target:        target,
 			matrixStr:     matrixStr,
@@ -185,6 +191,7 @@ func run(cfg config) error {
 type configData struct {
 	postgresDSN   string
 	ghcrOwner     string
+	ghcrUsername  string
 	ghcrToken     string
 	target        remotebuild.Target
 	matrixStr     string
@@ -613,8 +620,9 @@ type countingUploader struct {
 func newCountingUploader(cfg configData) *countingUploader {
 	return &countingUploader{
 		inner: upload.NewGHCR(upload.GHCRConfig{
-			Owner: cfg.ghcrOwner,
-			Token: cfg.ghcrToken,
+			Owner:    cfg.ghcrOwner,
+			Username: cfg.ghcrUsername,
+			Token:    cfg.ghcrToken,
 		}),
 	}
 }

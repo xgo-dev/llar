@@ -51,4 +51,7 @@ jobs:
         run: go mod download
 
       - name: Run remote build E2E
-        run: go run ./testdata/remote-build-e2e --ghcr-token "${{ secrets.GHCR_TOKEN || github.token }}"
+        run: >-
+          go run ./testdata/remote-build-e2e
+          --ghcr-username "${{ secrets.GHCR_USERNAME || github.actor }}"
+          --ghcr-token "${{ secrets.GHCR_TOKEN || github.token }}"
