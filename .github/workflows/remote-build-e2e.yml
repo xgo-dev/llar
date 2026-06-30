@@ -7,7 +7,7 @@ on:
       - "**"
       - "!dependabot/**"
       - "!xgopilot/**"
-  pull_request:
+  pull_request_target:
     branches: ["**"]
 
 concurrency:
@@ -22,6 +22,7 @@ jobs:
   remote-build-e2e:
     name: llar make -> GHCR -> Postgres
     runs-on: ubuntu-latest
+    environment: ghcr-e2e
 
     services:
       postgres:
@@ -41,6 +42,9 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -56,8 +60,12 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Run remote build E2E
+        env:
+          GHCR_OWNER: ${{ secrets.GHCR_OWNER || github.repository_owner }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME || github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || github.token }}
         run: >-
           go run ./testdata/remote-build-e2e
-          --ghcr-owner "${{ secrets.GHCR_OWNER || github.repository_owner }}"
-          --ghcr-username "${{ secrets.GHCR_USERNAME || github.actor }}"
-          --ghcr-token "${{ secrets.GHCR_TOKEN || github.token }}"
+          --ghcr-owner "$GHCR_OWNER"
+          --ghcr-username "$GHCR_USERNAME"
+          --ghcr-token "$GHCR_TOKEN"
