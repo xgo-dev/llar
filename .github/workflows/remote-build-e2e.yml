@@ -52,7 +52,7 @@ jobs:
 
       - name: Install llar
         run: |
-          go install ./cmd/llar
+          go install -ldflags="-checklinkname=0" ./cmd/llar
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       - name: Run remote build E2E
