@@ -1,4 +1,4 @@
-package upload
+package artifact
 
 import (
 	"context"
@@ -21,4 +21,9 @@ type Result struct {
 type Uploader interface {
 	Type() string
 	Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error)
+}
+
+type Downloader interface {
+	Type() string
+	Download(ctx context.Context, source Source, checksum string) ([]byte, error)
 }

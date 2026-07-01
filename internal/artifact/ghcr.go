@@ -1,4 +1,4 @@
-package upload
+package artifact
 
 import (
 	"context"
@@ -25,25 +25,25 @@ type GHCRConfig struct {
 	Token    string
 }
 
-func NewGHCR(cfg GHCRConfig) Uploader {
-	return ghcrUploader{
+func NewGHCR(cfg GHCRConfig) *GHCR {
+	return &GHCR{
 		cfg:        cfg,
 		writeIndex: writeRemoteIndex,
 	}
 }
 
-type ghcrUploader struct {
+type GHCR struct {
 	cfg        GHCRConfig
 	writeIndex indexWriter
 }
 
 type indexWriter func(ctx context.Context, ref string, index v1.ImageIndex, username, token string) error
 
-func (u ghcrUploader) Type() string {
+func (u *GHCR) Type() string {
 	return "ghcr"
 }
 
-func (u ghcrUploader) Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error) {
+func (u *GHCR) Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error) {
 	ref, err := parseGHCRName(opts.Name, opts.Tag, u.cfg.Owner)
 	if err != nil {
 		return Result{}, err
@@ -83,6 +83,37 @@ func (u ghcrUploader) Upload(ctx context.Context, r io.ReadSeeker, opts Options)
 
 	result.URL = "https://ghcr.io/v2/" + ref.repo + "/blobs/sha256:" + result.Checksum
 	return result, nil
+}
+
+func (u *GHCR) Download(ctx context.Context, source Source, checksum string) ([]byte, error) {
+	if source.Type != "" && source.Type != u.Type() {
+		return nil, fmt.Errorf("source type = %q, want %q", source.Type, u.Type())
+	}
+	repo, digest, err := parseGHCRBlobURL(source.URL)
+	if err != nil {
+		return nil, err
+	}
+	if checksum != "" && digest != checksum {
+		return nil, fmt.Errorf("artifact source digest = %q, want checksum %q", digest, checksum)
+	}
+	ref, err := name.NewDigest("ghcr.io/"+repo+"@sha256:"+digest, name.WeakValidation)
+	if err != nil {
+		return nil, fmt.Errorf("GHCR blob ref: %w", err)
+	}
+	layer, err := remote.Layer(ref, u.remoteOptions(ctx)...)
+	if err != nil {
+		return nil, fmt.Errorf("read GHCR blob %s: %w", ref.String(), err)
+	}
+	rc, err := layer.Compressed()
+	if err != nil {
+		return nil, fmt.Errorf("open GHCR blob %s: %w", ref.String(), err)
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("read GHCR blob %s: %w", ref.String(), err)
+	}
+	return body, nil
 }
 
 func checksumResult(r io.ReadSeeker) (Result, error) {
@@ -145,6 +176,19 @@ func parseGHCRName(rawName, tag, owner string) (ghcrRef, error) {
 	return ghcrRef{repo: repo, tag: tag}, nil
 }
 
+func parseGHCRBlobURL(sourceURL string) (repo, digest string, err error) {
+	const prefix = "https://ghcr.io/v2/"
+	if !strings.HasPrefix(sourceURL, prefix) {
+		return "", "", fmt.Errorf("source url = %q, want GHCR URL", sourceURL)
+	}
+	rest := strings.TrimPrefix(sourceURL, prefix)
+	repo, digest, ok := strings.Cut(rest, "/blobs/sha256:")
+	if !ok || repo == "" || digest == "" {
+		return "", "", fmt.Errorf("source url = %q, want GHCR blob URL", sourceURL)
+	}
+	return repo, digest, nil
+}
+
 func layerMediaType(archiveType string) (types.MediaType, error) {
 	switch archiveType {
 	case "tar.gz":
@@ -192,6 +236,15 @@ func writeRemoteIndex(ctx context.Context, ref string, index v1.ImageIndex, user
 	if err != nil {
 		return err
 	}
+	opts := ghcrRemoteOptions(ctx, username, token)
+	return remote.WriteIndex(tag, index, opts...)
+}
+
+func (u *GHCR) remoteOptions(ctx context.Context) []remote.Option {
+	return ghcrRemoteOptions(ctx, u.cfg.Username, u.cfg.Token)
+}
+
+func ghcrRemoteOptions(ctx context.Context, username, token string) []remote.Option {
 	opts := []remote.Option{remote.WithContext(ctx)}
 	if token != "" {
 		opts = append(opts, remote.WithAuth(authn.FromConfig(authn.AuthConfig{
@@ -199,5 +252,5 @@ func writeRemoteIndex(ctx context.Context, ref string, index v1.ImageIndex, user
 			Password: token,
 		})))
 	}
-	return remote.WriteIndex(tag, index, opts...)
+	return opts
 }

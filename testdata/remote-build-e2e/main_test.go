@@ -8,8 +8,7 @@ import (
 	"testing"
 
 	"github.com/goplus/llar/formula"
-	artifact "github.com/goplus/llar/internal/artfact"
-	"github.com/goplus/llar/internal/upload"
+	artifact "github.com/goplus/llar/internal/artifact"
 )
 
 func TestAssertArtifactRejectsChecksumURLMismatch(t *testing.T) {
@@ -37,7 +36,7 @@ func TestAssertArtifactRejectsChecksumURLMismatch(t *testing.T) {
 func TestCountingUploaderRejectsArchiveChecksumMismatch(t *testing.T) {
 	uploader := &countingUploader{
 		inner: fakeUploader{
-			result: upload.Result{
+			result: artifact.Result{
 				URL:      "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 				Size:     3,
 				Checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -45,7 +44,7 @@ func TestCountingUploaderRejectsArchiveChecksumMismatch(t *testing.T) {
 		},
 	}
 
-	_, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("abc")), upload.Options{})
+	_, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("abc")), artifact.Options{})
 	if err == nil {
 		t.Fatal("Upload succeeded, want checksum mismatch error")
 	}
@@ -55,13 +54,13 @@ func TestCountingUploaderRejectsArchiveChecksumMismatch(t *testing.T) {
 }
 
 type fakeUploader struct {
-	result upload.Result
+	result artifact.Result
 }
 
 func (u fakeUploader) Type() string {
 	return "ghcr"
 }
 
-func (u fakeUploader) Upload(context.Context, io.ReadSeeker, upload.Options) (upload.Result, error) {
+func (u fakeUploader) Upload(context.Context, io.ReadSeeker, artifact.Options) (artifact.Result, error) {
 	return u.result, nil
 }

@@ -29,11 +29,11 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/google/go-github/v68/github"
 	"github.com/goplus/llar/formula"
-	artifact "github.com/goplus/llar/internal/artfact"
+	artifact "github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
-	"github.com/goplus/llar/internal/upload"
+
 	"github.com/goplus/llar/mod/module"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -493,21 +493,25 @@ func (s *suite) build(ctx context.Context, builder *build.Builder, target target
 	return builder.Build(ctx, mods)
 }
 
-func (s *suite) newBuilder(matrix formula.Matrix, uploader upload.Uploader) (*build.Builder, error) {
+func (s *suite) newBuilder(matrix formula.Matrix, uploader artifact.Uploader) (*build.Builder, error) {
 	workspaceDir, err := os.MkdirTemp("", "llar-build-cache-e2e-workspace-*")
 	if err != nil {
 		return nil, err
 	}
+	downloader := artifact.NewGHCR(artifact.GHCRConfig{
+		Owner:    s.cfg.ghcrOwner,
+		Username: s.cfg.ghcrUsername,
+		Token:    s.cfg.ghcrToken,
+	})
 	return build.NewBuilder(build.Options{
 		Store:        s.formulas,
 		MatrixStr:    matrixString(matrix),
 		WorkspaceDir: workspaceDir,
 		Cache: build.NewArtifactCache(build.ArtifactCacheOptions{
-			Store:        s.artifacts,
-			Uploader:     uploader,
-			Attrs:        matrixAttrs(matrix),
-			GHCRUsername: s.cfg.ghcrUsername,
-			GHCRToken:    s.cfg.ghcrToken,
+			Store:      s.artifacts,
+			Uploader:   uploader,
+			Downloader: downloader,
+			Attrs:      matrixAttrs(matrix),
 		}),
 	})
 }
@@ -688,7 +692,7 @@ func assertArtifact(ctx context.Context, cfg configData, target target, matrix f
 	return assertGHCRTag(ctx, cfg, target, matrix, got, size)
 }
 
-func assertUploadOptions(opts upload.Options, target target, matrix formula.Matrix) error {
+func assertUploadOptions(opts artifact.Options, target target, matrix formula.Matrix) error {
 	if opts.Name != target.Module {
 		return fmt.Errorf("upload name = %q, want %q", opts.Name, target.Module)
 	}
@@ -703,7 +707,7 @@ func assertUploadOptions(opts upload.Options, target target, matrix formula.Matr
 	return nil
 }
 
-func assertOneUploadForTarget(options []upload.Options, target target, matrix formula.Matrix) error {
+func assertOneUploadForTarget(options []artifact.Options, target target, matrix formula.Matrix) error {
 	count := 0
 	for _, opts := range options {
 		if opts.Name != target.Module {
@@ -1018,13 +1022,13 @@ func assertStoredArtifact(ctx context.Context, store artifact.Store, target targ
 type countingUploader struct {
 	mu      sync.Mutex
 	calls   int
-	options []upload.Options
-	inner   upload.Uploader
+	options []artifact.Options
+	inner   artifact.Uploader
 }
 
 func newCountingUploader(cfg configData) *countingUploader {
 	return &countingUploader{
-		inner: upload.NewGHCR(upload.GHCRConfig{
+		inner: artifact.NewGHCR(artifact.GHCRConfig{
 			Owner:    cfg.ghcrOwner,
 			Username: cfg.ghcrUsername,
 			Token:    cfg.ghcrToken,
@@ -1036,7 +1040,7 @@ func (u *countingUploader) Type() string {
 	return u.inner.Type()
 }
 
-func (u *countingUploader) Upload(ctx context.Context, r io.ReadSeeker, opts upload.Options) (upload.Result, error) {
+func (u *countingUploader) Upload(ctx context.Context, r io.ReadSeeker, opts artifact.Options) (artifact.Result, error) {
 	u.mu.Lock()
 	u.calls++
 	u.options = append(u.options, opts)
@@ -1044,24 +1048,24 @@ func (u *countingUploader) Upload(ctx context.Context, r io.ReadSeeker, opts upl
 
 	offset, err := r.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return upload.Result{}, err
+		return artifact.Result{}, err
 	}
 	hash, size, err := v1.SHA256(r)
 	if err != nil {
-		return upload.Result{}, err
+		return artifact.Result{}, err
 	}
 	if _, err := r.Seek(offset, io.SeekStart); err != nil {
-		return upload.Result{}, err
+		return artifact.Result{}, err
 	}
 	result, err := u.inner.Upload(ctx, r, opts)
 	if err != nil {
-		return upload.Result{}, err
+		return artifact.Result{}, err
 	}
 	if result.Checksum != hash.Hex {
-		return upload.Result{}, fmt.Errorf("upload checksum = %q, want archive checksum %q", result.Checksum, hash.Hex)
+		return artifact.Result{}, fmt.Errorf("upload checksum = %q, want archive checksum %q", result.Checksum, hash.Hex)
 	}
 	if result.Size != size {
-		return upload.Result{}, fmt.Errorf("upload size = %d, want archive size %d", result.Size, size)
+		return artifact.Result{}, fmt.Errorf("upload size = %d, want archive size %d", result.Size, size)
 	}
 	return result, nil
 }
@@ -1072,10 +1076,10 @@ func (u *countingUploader) Calls() int {
 	return u.calls
 }
 
-func (u *countingUploader) Options() []upload.Options {
+func (u *countingUploader) Options() []artifact.Options {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return append([]upload.Options(nil), u.options...)
+	return append([]artifact.Options(nil), u.options...)
 }
 
 type buildResult struct {

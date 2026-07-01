@@ -131,6 +131,107 @@ func TestGormStorePutReturnsCanonicalArtifactWithoutSelect(t *testing.T) {
 	}
 }
 
+func TestGormStorePutCreatesPlaceholderAndGetOrUpdateStoresArtifact(t *testing.T) {
+	store, _ := newTestGormStore(t)
+
+	ctx := context.Background()
+	key := Key{Module: "madler/zlib", Version: "v1.3.1", MatrixStr: "amd64-linux"}
+	want := Artifact{
+		Source:   Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:abc"},
+		Type:     "tar.gz",
+		Metadata: "-lz",
+		Checksum: "abc",
+	}
+
+	placeholder, err := store.Put(ctx, key, Artifact{})
+	if err != nil {
+		t.Fatalf("Put placeholder: %v", err)
+	}
+	if placeholder != (Artifact{}) {
+		t.Fatalf("Put placeholder = %+v, want empty artifact", placeholder)
+	}
+	if got, ok, err := store.Get(ctx, key); err != nil {
+		t.Fatalf("Get placeholder: %v", err)
+	} else if ok {
+		t.Fatalf("Get placeholder ok = true, artifact = %+v", got)
+	}
+
+	calls := 0
+	got, err := store.GetOrUpdate(ctx, key, func() (Artifact, error) {
+		calls++
+		return want, nil
+	})
+	if err != nil {
+		t.Fatalf("GetOrUpdate: %v", err)
+	}
+	if got != want {
+		t.Fatalf("GetOrUpdate = %+v, want %+v", got, want)
+	}
+	if calls != 1 {
+		t.Fatalf("update calls = %d, want 1", calls)
+	}
+
+	stored, ok, err := store.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("Get after GetOrUpdate: %v", err)
+	}
+	if !ok {
+		t.Fatal("Get after GetOrUpdate ok = false")
+	}
+	if stored != want {
+		t.Fatalf("Get after GetOrUpdate = %+v, want %+v", stored, want)
+	}
+}
+
+func TestGormStoreGetOrUpdateReportsMissingPlaceholder(t *testing.T) {
+	store, _ := newTestGormStore(t)
+
+	ctx := context.Background()
+	key := Key{Module: "madler/zlib", Version: "v1.3.1", MatrixStr: "amd64-linux"}
+	_, err := store.GetOrUpdate(ctx, key, func() (Artifact, error) {
+		return Artifact{}, nil
+	})
+	if err == nil {
+		t.Fatal("GetOrUpdate error = nil, want missing placeholder error")
+	}
+}
+
+func TestGormStoreGetOrUpdateReturnsExistingArtifact(t *testing.T) {
+	store, _ := newTestGormStore(t)
+
+	ctx := context.Background()
+	key := Key{Module: "madler/zlib", Version: "v1.3.1", MatrixStr: "amd64-linux"}
+	existing := Artifact{
+		Source:   Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:existing"},
+		Type:     "tar.gz",
+		Metadata: "-lz",
+		Checksum: "existing",
+	}
+	if _, err := store.Put(ctx, key, existing); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	calls := 0
+	got, err := store.GetOrUpdate(ctx, key, func() (Artifact, error) {
+		calls++
+		return Artifact{
+			Source:   Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:new"},
+			Type:     "tar.gz",
+			Metadata: "-lz-new",
+			Checksum: "new",
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("GetOrUpdate: %v", err)
+	}
+	if got != existing {
+		t.Fatalf("GetOrUpdate = %+v, want %+v", got, existing)
+	}
+	if calls != 0 {
+		t.Fatalf("update calls = %d, want 0", calls)
+	}
+}
+
 func TestGormStoreDelete(t *testing.T) {
 	store, _ := newTestGormStore(t)
 

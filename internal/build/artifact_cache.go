@@ -5,36 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/goplus/llar/internal/artfact"
+	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/artifact/archiver"
-	"github.com/goplus/llar/internal/upload"
 	"github.com/goplus/llar/mod/module"
 )
 
 type ArtifactCacheOptions struct {
-	Store        artifact.Store
-	Uploader     upload.Uploader
-	ArchiveType  string
-	Attrs        map[string]string
-	GHCRUsername string
-	GHCRToken    string
+	Store       artifact.Store
+	Uploader    artifact.Uploader
+	Downloader  artifact.Downloader
+	ArchiveType string
+	Attrs       map[string]string
 }
 
 type artifactCache struct {
-	store        artifact.Store
-	uploader     upload.Uploader
-	archiveType  string
-	attrs        map[string]string
-	ghcrUsername string
-	ghcrToken    string
+	store       artifact.Store
+	uploader    artifact.Uploader
+	downloader  artifact.Downloader
+	archiveType string
+	attrs       map[string]string
 }
 
 type artifactMetadata struct {
@@ -48,18 +40,20 @@ func NewArtifactCache(opts ArtifactCacheOptions) Cache {
 		archiveType = "tar.gz"
 	}
 	return &artifactCache{
-		store:        opts.Store,
-		uploader:     opts.Uploader,
-		archiveType:  archiveType,
-		attrs:        opts.Attrs,
-		ghcrUsername: opts.GHCRUsername,
-		ghcrToken:    opts.GHCRToken,
+		store:       opts.Store,
+		uploader:    opts.Uploader,
+		downloader:  opts.Downloader,
+		archiveType: archiveType,
+		attrs:       opts.Attrs,
 	}
 }
 
 func (c *artifactCache) Get(ctx context.Context, key CacheKey, outputDir string) (CacheEntry, bool, error) {
 	if c.store == nil {
 		return CacheEntry{}, false, errors.New("artifact cache store is required")
+	}
+	if c.downloader == nil {
+		return CacheEntry{}, false, errors.New("artifact cache downloader is required")
 	}
 	stored, ok, err := c.store.Get(ctx, artifactKey(key))
 	if err != nil {
@@ -68,7 +62,10 @@ func (c *artifactCache) Get(ctx context.Context, key CacheKey, outputDir string)
 	if !ok {
 		return CacheEntry{}, false, nil
 	}
-	body, err := c.download(ctx, stored.Source, stored.Checksum)
+	if stored.Source.Type != c.downloader.Type() {
+		return CacheEntry{}, false, fmt.Errorf("artifact source type %q does not match downloader type %q", stored.Source.Type, c.downloader.Type())
+	}
+	body, err := c.downloader.Download(ctx, stored.Source, stored.Checksum)
 	if err != nil {
 		return CacheEntry{}, false, err
 	}
@@ -105,9 +102,49 @@ func (c *artifactCache) Put(ctx context.Context, key CacheKey, outputDir string,
 	if uploadType == "" {
 		return CacheEntry{}, errors.New("artifact cache uploader type is required")
 	}
+
+	keyForStore := artifactKey(key)
+
+	// GHCR tags are mutable. If two workers upload the same artifact key, the
+	// last push wins, so GHCR cannot decide the canonical artifact. The artifact
+	// row is the distributed lock and source of truth.
+	//
+	// Example key: madler/zlib@v1.3.1 linux/amd64
+	//
+	// Scenario 1: artifact already exists
+	//   worker B -> Put(empty placeholder) -> source_url != ""
+	//   worker B -> return worker A's artifact without packing/uploading
+	//
+	// Scenario 2: artifact does not exist
+	//   worker A -> Put(empty placeholder) -> source_url == ""
+	//   worker A -> GetOrUpdate -> lock row -> pack/upload -> update source_url
+	//   worker B -> wait for row lock -> source_url != "" -> return A's artifact
+	stored, err := c.store.Put(ctx, keyForStore, artifact.Artifact{})
+	if err != nil {
+		return CacheEntry{}, fmt.Errorf("put artifact placeholder: %w", err)
+	}
+	if stored.Source.URL != "" {
+		entry.Metadata = stored.Metadata
+		return entry, nil
+	}
+	stored, err = c.store.GetOrUpdate(ctx, keyForStore, func() (artifact.Artifact, error) {
+		uploaded, err := c.upload(ctx, key, outputDir, entry, uploadType)
+		if err != nil {
+			return artifact.Artifact{}, err
+		}
+		return uploaded, nil
+	})
+	if err != nil {
+		return CacheEntry{}, fmt.Errorf("get or update artifact: %w", err)
+	}
+	entry.Metadata = stored.Metadata
+	return entry, nil
+}
+
+func (c *artifactCache) upload(ctx context.Context, key CacheKey, outputDir string, entry CacheEntry, uploadType string) (artifact.Artifact, error) {
 	tmpDir, err := os.MkdirTemp("", "llar-artifact-cache-*")
 	if err != nil {
-		return CacheEntry{}, err
+		return artifact.Artifact{}, err
 	}
 	defer os.RemoveAll(tmpDir)
 	archivePath := filepath.Join(tmpDir, "artifact."+c.archiveType)
@@ -116,27 +153,27 @@ func (c *artifactCache) Put(ctx context.Context, key CacheKey, outputDir string,
 		Deps:     artifactDepStrings(entry.Deps),
 	}, "", "  ")
 	if err != nil {
-		return CacheEntry{}, err
+		return artifact.Artifact{}, err
 	}
 	if err := archiver.Pack(outputDir, archivePath, json.RawMessage(append(body, '\n'))); err != nil {
-		return CacheEntry{}, fmt.Errorf("pack artifact: %w", err)
+		return artifact.Artifact{}, fmt.Errorf("pack artifact: %w", err)
 	}
 	archive, err := os.Open(archivePath)
 	if err != nil {
-		return CacheEntry{}, err
+		return artifact.Artifact{}, err
 	}
 	defer archive.Close()
 
-	uploaded, err := c.uploader.Upload(ctx, archive, upload.Options{
+	uploaded, err := c.uploader.Upload(ctx, archive, artifact.Options{
 		Name:  key.Module.Path,
 		Tag:   key.Module.Version,
 		Type:  c.archiveType,
-		Attrs: c.uploadAttrs(key),
+		Attrs: c.uploadAttrs(c.uploader.Type(), key),
 	})
 	if err != nil {
-		return CacheEntry{}, fmt.Errorf("upload artifact: %w", err)
+		return artifact.Artifact{}, fmt.Errorf("upload artifact: %w", err)
 	}
-	stored, err := c.store.Put(ctx, artifactKey(key), artifact.Artifact{
+	return artifact.Artifact{
 		Source: artifact.Source{
 			Type: uploadType,
 			URL:  uploaded.URL,
@@ -144,29 +181,20 @@ func (c *artifactCache) Put(ctx context.Context, key CacheKey, outputDir string,
 		Type:     c.archiveType,
 		Metadata: entry.Metadata,
 		Checksum: uploaded.Checksum,
-	})
-	if err != nil {
-		return CacheEntry{}, fmt.Errorf("put artifact: %w", err)
-	}
-	entry.Metadata = stored.Metadata
-	return entry, nil
+	}, nil
 }
 
-func (c *artifactCache) uploadAttrs(key CacheKey) map[string]string {
-	attrs := make(map[string]string, len(c.attrs)+1)
-	for k, v := range c.attrs {
-		attrs[k] = v
-	}
-	attrs["org.llar.matrix"] = key.Matrix
-	return attrs
-}
-
-func (c *artifactCache) download(ctx context.Context, source artifact.Source, checksum string) ([]byte, error) {
-	switch source.Type {
+func (c *artifactCache) uploadAttrs(uploadType string, key CacheKey) map[string]string {
+	switch uploadType {
 	case "ghcr":
-		return readGHCRBlob(ctx, source.URL, checksum, c.ghcrUsername, c.ghcrToken)
+		attrs := make(map[string]string, len(c.attrs)+1)
+		for k, v := range c.attrs {
+			attrs[k] = v
+		}
+		attrs["org.llar.matrix"] = key.Matrix
+		return attrs
 	default:
-		return nil, fmt.Errorf("unsupported artifact source type %q", source.Type)
+		return nil
 	}
 }
 
@@ -187,52 +215,4 @@ func artifactDepStrings(deps []module.Version) []string {
 		out = append(out, dep.Path+"@"+dep.Version)
 	}
 	return out
-}
-
-func readGHCRBlob(ctx context.Context, sourceURL, checksum, username, token string) ([]byte, error) {
-	repo, digest, err := parseGHCRBlobURL(sourceURL)
-	if err != nil {
-		return nil, err
-	}
-	if checksum != "" && digest != checksum {
-		return nil, fmt.Errorf("artifact source digest = %q, want checksum %q", digest, checksum)
-	}
-	ref, err := name.NewDigest("ghcr.io/"+repo+"@sha256:"+digest, name.WeakValidation)
-	if err != nil {
-		return nil, fmt.Errorf("GHCR blob ref: %w", err)
-	}
-	opts := []remote.Option{remote.WithContext(ctx)}
-	if token != "" {
-		opts = append(opts, remote.WithAuth(authn.FromConfig(authn.AuthConfig{
-			Username: username,
-			Password: token,
-		})))
-	}
-	layer, err := remote.Layer(ref, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("read GHCR blob %s: %w", ref.String(), err)
-	}
-	rc, err := layer.Compressed()
-	if err != nil {
-		return nil, fmt.Errorf("open GHCR blob %s: %w", ref.String(), err)
-	}
-	defer rc.Close()
-	body, err := io.ReadAll(rc)
-	if err != nil {
-		return nil, fmt.Errorf("read GHCR blob %s: %w", ref.String(), err)
-	}
-	return body, nil
-}
-
-func parseGHCRBlobURL(sourceURL string) (repo, digest string, err error) {
-	const prefix = "https://ghcr.io/v2/"
-	if !strings.HasPrefix(sourceURL, prefix) {
-		return "", "", fmt.Errorf("source url = %q, want GHCR URL", sourceURL)
-	}
-	rest := strings.TrimPrefix(sourceURL, prefix)
-	repo, digest, ok := strings.Cut(rest, "/blobs/sha256:")
-	if !ok || repo == "" || digest == "" {
-		return "", "", fmt.Errorf("source url = %q, want GHCR blob URL", sourceURL)
-	}
-	return repo, digest, nil
 }
