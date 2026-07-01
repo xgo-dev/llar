@@ -119,6 +119,9 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 			if err != nil {
 				return artifact.Artifact{}, err
 			}
+			// TODO: When llar make can expose dependency artifacts, upload and
+			// Put those artifacts here too. Remote build currently stores only
+			// the root target artifact returned by llar make.
 			uploaded, archiveType, uploadType, err := b.upload(ctx, req, modulePath, matrixStr, made)
 			if err != nil {
 				return artifact.Artifact{}, err
