@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -29,6 +30,7 @@ const (
 	defaultPostgresDSN   = "host=localhost port=5432 user=llar password=llar dbname=llar_e2e sslmode=disable"
 	defaultTarget        = "madler/zlib@v1.3.1"
 	defaultSharedTargets = "DaveGamble/cJSON@v1.7.18,pnggroup/libpng@v1.6.47"
+	localFormulaRoot     = "testdata/remote-build-e2e/formulas"
 )
 
 func main() {
@@ -120,9 +122,19 @@ func run(cfg config) error {
 	if err != nil {
 		return err
 	}
+	target, err = withLocalFormula(target)
+	if err != nil {
+		return err
+	}
 	sharedTargets, err := parseTargets(cfg.sharedTargets)
 	if err != nil {
 		return err
+	}
+	for i := range sharedTargets {
+		sharedTargets[i], err = withLocalFormula(sharedTargets[i])
+		if err != nil {
+			return err
+		}
 	}
 	cleanupTargets := append([]remotebuild.Target{target}, sharedTargets...)
 	if err := cleanupGHCRPackages(ctx, ghcrCleanupConfig{
@@ -497,6 +509,15 @@ func parseTargets(value string) ([]remotebuild.Target, error) {
 		targets = append(targets, target)
 	}
 	return targets, nil
+}
+
+func withLocalFormula(target remotebuild.Target) (remotebuild.Target, error) {
+	dir := filepath.Join(localFormulaRoot, filepath.FromSlash(target.Module))
+	if _, err := os.Stat(filepath.Join(dir, "versions.json")); err != nil {
+		return remotebuild.Target{}, fmt.Errorf("local formula for %s: %w", target.Module, err)
+	}
+	target.FormulaDir = dir
+	return target, nil
 }
 
 func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remotebuild.TargetArtifact) error {

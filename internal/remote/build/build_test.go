@@ -125,6 +125,54 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 	}
 }
 
+func TestBuildRunsMakeWithLocalFormulaDir(t *testing.T) {
+	installLLARHelper(t)
+
+	formulaDir := filepath.Join(t.TempDir(), "zlib")
+	if err := os.MkdirAll(filepath.Join(formulaDir, "v1.3.1"), 0o755); err != nil {
+		t.Fatalf("create formula dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(formulaDir, "versions.json"), []byte(`{"path":"madler/zlib","deps":{}}`), 0o644); err != nil {
+		t.Fatalf("write versions.json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(formulaDir, "v1.3.1", "Zlib_llar.gox"), []byte(`id "madler/zlib"`), 0o644); err != nil {
+		t.Fatalf("write formula: %v", err)
+	}
+
+	argsFile := filepath.Join(t.TempDir(), "args")
+	t.Setenv("LLAR_MAKE_ARGS_FILE", argsFile)
+	t.Setenv("LLAR_MAKE_EXPECT_LOCAL_FORMULA", "1")
+
+	req := testRequest()
+	req.Target.FormulaDir = formulaDir
+	uploader := &fakeUploader{
+		result: upload.Result{
+			URL:      "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:abc",
+			Checksum: "abc",
+		},
+	}
+	got, err := New(Options{
+		Store:    newFakeStore(),
+		Uploader: uploader,
+	}).Build(context.Background(), req, nil)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(got) != 1 || got[0].Target != "madler/zlib@v1.3.1" {
+		t.Fatalf("Build target = %+v, want madler/zlib@v1.3.1", got)
+	}
+
+	data, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read llar args: %v", err)
+	}
+	args := strings.Split(strings.TrimSpace(string(data)), "\n")
+	target := args[len(args)-1]
+	if !strings.HasPrefix(target, "./") || !strings.HasSuffix(target, "@v1.3.1") {
+		t.Fatalf("llar make target = %q, want local formula target", target)
+	}
+}
+
 func TestBuildJoinsConcurrentBuildsForSameArtifactKey(t *testing.T) {
 	installLLARHelper(t)
 
@@ -301,6 +349,24 @@ func TestLLARMakeHelperProcess(t *testing.T) {
 		if err := f.Close(); err != nil {
 			_, _ = os.Stderr.WriteString(err.Error() + "\n")
 			os.Exit(5)
+		}
+	}
+	if argsFile := os.Getenv("LLAR_MAKE_ARGS_FILE"); argsFile != "" {
+		if err := os.WriteFile(argsFile, []byte(strings.Join(args, "\n")+"\n"), 0o644); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(5)
+		}
+	}
+	if os.Getenv("LLAR_MAKE_EXPECT_LOCAL_FORMULA") == "1" {
+		target := args[len(args)-1]
+		pattern, _, ok := strings.Cut(target, "@")
+		if !ok || !strings.HasPrefix(pattern, "./") {
+			_, _ = os.Stderr.WriteString("expected local formula target, got " + target + "\n")
+			os.Exit(7)
+		}
+		if _, err := os.Stat(filepath.Join(pattern, "versions.json")); err != nil {
+			_, _ = os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(7)
 		}
 	}
 	if started := os.Getenv("LLAR_MAKE_START_FILE"); started != "" {
