@@ -226,7 +226,7 @@ func (s *suite) coldBuild(ctx context.Context) error {
 	if err := assertUploadAttrs(s.baseUploader.Options()[0], s.baseReq); err != nil {
 		return err
 	}
-	if err := assertStoredArtifact(ctx, s.store, s.baseReq, got[0].Artifact); err != nil {
+	if err := assertStoredArtifact(ctx, s.store, s.cfg.target, s.baseReq.MatrixStr, got[0].Artifact); err != nil {
 		return err
 	}
 	s.base = got
@@ -282,7 +282,7 @@ func (s *suite) differentMatrix(ctx context.Context) error {
 	if err := assertUploadAttrs(uploader.Options()[0], req); err != nil {
 		return err
 	}
-	return assertStoredArtifact(ctx, s.store, req, got[0].Artifact)
+	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.MatrixStr, got[0].Artifact)
 }
 
 func (s *suite) concurrentDuplicate(ctx context.Context) error {
@@ -325,7 +325,7 @@ func (s *suite) concurrentDuplicate(ctx context.Context) error {
 	if err := assertUploadAttrs(uploader.Options()[0], req); err != nil {
 		return err
 	}
-	return assertStoredArtifact(ctx, s.store, req, first.artifacts[0].Artifact)
+	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.MatrixStr, first.artifacts[0].Artifact)
 }
 
 func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
@@ -338,11 +338,11 @@ func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
 	start := make(chan struct{})
 	for _, target := range s.cfg.sharedTargets {
 		req := requestForTarget(target, matrixStr)
-		go func(req remotebuild.Request) {
+		go func(target remotebuild.Target, req remotebuild.Request) {
 			<-start
 			got, err := builds.Build(ctx, req, nil)
-			results <- namedBuildResult{req: req, artifacts: got, err: err}
-		}(req)
+			results <- namedBuildResult{target: target, req: req, artifacts: got, err: err}
+		}(target, req)
 	}
 	close(start)
 
@@ -353,12 +353,12 @@ func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
 			return err
 		}
 		if result.err != nil {
-			return fmt.Errorf("Build %s@%s: %w", result.req.Target.Module, result.req.Target.Version, result.err)
+			return fmt.Errorf("Build %s@%s: %w", result.target.Module, result.target.Version, result.err)
 		}
-		if err := assertTargetArtifact(s.cfg, result.req.Target, result.artifacts); err != nil {
+		if err := assertTargetArtifact(s.cfg, result.target, result.artifacts); err != nil {
 			return err
 		}
-		if err := assertStoredArtifact(ctx, s.store, result.req, result.artifacts[0].Artifact); err != nil {
+		if err := assertStoredArtifact(ctx, s.store, result.target, result.req.MatrixStr, result.artifacts[0].Artifact); err != nil {
 			return err
 		}
 		gotByTarget[result.artifacts[0].Target] = result.artifacts
@@ -472,10 +472,11 @@ func isGitHubNotFound(err error) bool {
 }
 
 func requestForTarget(target remotebuild.Target, matrixStr string) remotebuild.Request {
+	localTarget := target
+	localTarget.Module = localFormulaPath(target)
 	return remotebuild.Request{
-		Target:     target,
-		MakeTarget: localMakeTarget(target),
-		MatrixStr:  matrixStr,
+		Target:    localTarget,
+		MatrixStr: matrixStr,
 		Matrix: remotebuild.Matrix{
 			Require: map[string]string{
 				"os":   runtime.GOOS,
@@ -518,12 +519,12 @@ func validateLocalFormula(target remotebuild.Target) error {
 	return nil
 }
 
-func localMakeTarget(target remotebuild.Target) string {
+func localFormulaPath(target remotebuild.Target) string {
 	root, err := filepath.Abs(localFormulaRoot)
 	if err != nil {
 		root = localFormulaRoot
 	}
-	return filepath.Join(root, filepath.FromSlash(target.Module)) + "@" + target.Version
+	return filepath.Join(root, filepath.FromSlash(target.Module))
 }
 
 func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remotebuild.TargetArtifact) error {
@@ -566,11 +567,11 @@ func assertUploadAttrs(opts upload.Options, req remotebuild.Request) error {
 	return nil
 }
 
-func assertStoredArtifact(ctx context.Context, store artifact.Store, req remotebuild.Request, want artifact.Artifact) error {
+func assertStoredArtifact(ctx context.Context, store artifact.Store, target remotebuild.Target, matrixStr string, want artifact.Artifact) error {
 	got, ok, err := store.Get(ctx, artifact.Key{
-		Module:    req.Target.Module,
-		Version:   req.Target.Version,
-		MatrixStr: req.MatrixStr,
+		Module:    target.Module,
+		Version:   target.Version,
+		MatrixStr: matrixStr,
 	})
 	if err != nil {
 		return fmt.Errorf("Get stored artifact: %w", err)
@@ -641,6 +642,7 @@ type buildResult struct {
 }
 
 type namedBuildResult struct {
+	target    remotebuild.Target
 	req       remotebuild.Request
 	artifacts []remotebuild.TargetArtifact
 	err       error

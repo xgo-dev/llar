@@ -125,7 +125,7 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 	}
 }
 
-func TestBuildRunsMakeWithRequestedMakeTarget(t *testing.T) {
+func TestBuildRunsMakeWithLocalTargetPath(t *testing.T) {
 	installLLARHelper(t)
 
 	formulaDir := filepath.Join(t.TempDir(), "zlib")
@@ -144,7 +144,7 @@ func TestBuildRunsMakeWithRequestedMakeTarget(t *testing.T) {
 	t.Setenv("LLAR_MAKE_EXPECT_LOCAL_FORMULA", "1")
 
 	req := testRequest()
-	req.MakeTarget = formulaDir + "@v1.3.1"
+	req.Target.Module = formulaDir
 	uploader := &fakeUploader{
 		result: upload.Result{
 			URL:      "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:abc",
@@ -161,6 +161,9 @@ func TestBuildRunsMakeWithRequestedMakeTarget(t *testing.T) {
 	if len(got) != 1 || got[0].Target != "madler/zlib@v1.3.1" {
 		t.Fatalf("Build target = %+v, want madler/zlib@v1.3.1", got)
 	}
+	if got := uploader.Options()[0].Name; got != "madler/zlib:v1.3.1" {
+		t.Fatalf("upload name = %q, want madler/zlib:v1.3.1", got)
+	}
 
 	data, err := os.ReadFile(argsFile)
 	if err != nil {
@@ -168,17 +171,12 @@ func TestBuildRunsMakeWithRequestedMakeTarget(t *testing.T) {
 	}
 	args := strings.Split(strings.TrimSpace(string(data)), "\n")
 	target := args[len(args)-1]
-	i := strings.LastIndex(req.MakeTarget, "@")
-	if i < 0 {
-		t.Fatalf("make target has no version: %q", req.MakeTarget)
-	}
-	wantPattern := req.MakeTarget[:i]
-	version := req.MakeTarget[i:]
+	wantPattern := req.Target.Module
 	wantPattern, err = filepath.EvalSymlinks(wantPattern)
 	if err != nil {
 		t.Fatalf("eval make target: %v", err)
 	}
-	wantTarget := wantPattern + version
+	wantTarget := wantPattern + "@v1.3.1"
 	if target != wantTarget {
 		t.Fatalf("llar make target = %q, want %q", target, wantTarget)
 	}
@@ -255,7 +253,7 @@ func TestBuildRequiresStore(t *testing.T) {
 }
 
 func TestBuildUploadRequiresUploader(t *testing.T) {
-	_, _, _, err := (&Builds{}).upload(context.Background(), testRequest(), makeResult{
+	_, _, _, err := (&Builds{}).upload(context.Background(), testRequest(), "madler/zlib", makeResult{
 		Archive: strings.NewReader("archive"),
 		Type:    "tar.gz",
 	})
@@ -272,7 +270,7 @@ func TestBuildUploadOmitsAttrsForNonGHCRUploader(t *testing.T) {
 			Checksum: "abc",
 		},
 	}
-	_, _, _, err := (&Builds{uploader: uploader}).upload(context.Background(), testRequest(), makeResult{
+	_, _, _, err := (&Builds{uploader: uploader}).upload(context.Background(), testRequest(), "madler/zlib", makeResult{
 		Archive: strings.NewReader("archive"),
 		Type:    "tar.gz",
 	})
