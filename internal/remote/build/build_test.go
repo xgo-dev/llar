@@ -125,7 +125,7 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 	}
 }
 
-func TestBuildRunsMakeWithLocalFormulaDir(t *testing.T) {
+func TestBuildRunsMakeWithRequestedMakeTarget(t *testing.T) {
 	installLLARHelper(t)
 
 	formulaDir := filepath.Join(t.TempDir(), "zlib")
@@ -144,7 +144,7 @@ func TestBuildRunsMakeWithLocalFormulaDir(t *testing.T) {
 	t.Setenv("LLAR_MAKE_EXPECT_LOCAL_FORMULA", "1")
 
 	req := testRequest()
-	req.Target.FormulaDir = formulaDir
+	req.MakeTarget = formulaDir + "@v1.3.1"
 	uploader := &fakeUploader{
 		result: upload.Result{
 			URL:      "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:abc",
@@ -168,8 +168,19 @@ func TestBuildRunsMakeWithLocalFormulaDir(t *testing.T) {
 	}
 	args := strings.Split(strings.TrimSpace(string(data)), "\n")
 	target := args[len(args)-1]
-	if !strings.HasPrefix(target, "./") || !strings.HasSuffix(target, "@v1.3.1") {
-		t.Fatalf("llar make target = %q, want local formula target", target)
+	i := strings.LastIndex(req.MakeTarget, "@")
+	if i < 0 {
+		t.Fatalf("make target has no version: %q", req.MakeTarget)
+	}
+	wantPattern := req.MakeTarget[:i]
+	version := req.MakeTarget[i:]
+	wantPattern, err = filepath.EvalSymlinks(wantPattern)
+	if err != nil {
+		t.Fatalf("eval make target: %v", err)
+	}
+	wantTarget := wantPattern + version
+	if target != wantTarget {
+		t.Fatalf("llar make target = %q, want %q", target, wantTarget)
 	}
 }
 
@@ -359,9 +370,24 @@ func TestLLARMakeHelperProcess(t *testing.T) {
 	}
 	if os.Getenv("LLAR_MAKE_EXPECT_LOCAL_FORMULA") == "1" {
 		target := args[len(args)-1]
-		pattern, _, ok := strings.Cut(target, "@")
-		if !ok || !strings.HasPrefix(pattern, "./") {
+		i := strings.LastIndex(target, "@")
+		if i < 0 {
 			_, _ = os.Stderr.WriteString("expected local formula target, got " + target + "\n")
+			os.Exit(7)
+		}
+		pattern := target[:i]
+		if !filepath.IsAbs(pattern) {
+			_, _ = os.Stderr.WriteString("expected absolute local formula target, got " + target + "\n")
+			os.Exit(7)
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			_, _ = os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(7)
+		}
+		rel, err := filepath.Rel(cwd, pattern)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+			_, _ = os.Stderr.WriteString("local formula target escapes cwd: " + target + "\n")
 			os.Exit(7)
 		}
 		if _, err := os.Stat(filepath.Join(pattern, "versions.json")); err != nil {

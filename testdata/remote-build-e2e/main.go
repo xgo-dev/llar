@@ -122,17 +122,15 @@ func run(cfg config) error {
 	if err != nil {
 		return err
 	}
-	target, err = withLocalFormula(target)
-	if err != nil {
+	if err := validateLocalFormula(target); err != nil {
 		return err
 	}
 	sharedTargets, err := parseTargets(cfg.sharedTargets)
 	if err != nil {
 		return err
 	}
-	for i := range sharedTargets {
-		sharedTargets[i], err = withLocalFormula(sharedTargets[i])
-		if err != nil {
+	for _, target := range sharedTargets {
+		if err := validateLocalFormula(target); err != nil {
 			return err
 		}
 	}
@@ -475,8 +473,9 @@ func isGitHubNotFound(err error) bool {
 
 func requestForTarget(target remotebuild.Target, matrixStr string) remotebuild.Request {
 	return remotebuild.Request{
-		Target:    target,
-		MatrixStr: matrixStr,
+		Target:     target,
+		MakeTarget: localMakeTarget(target),
+		MatrixStr:  matrixStr,
 		Matrix: remotebuild.Matrix{
 			Require: map[string]string{
 				"os":   runtime.GOOS,
@@ -511,13 +510,20 @@ func parseTargets(value string) ([]remotebuild.Target, error) {
 	return targets, nil
 }
 
-func withLocalFormula(target remotebuild.Target) (remotebuild.Target, error) {
+func validateLocalFormula(target remotebuild.Target) error {
 	dir := filepath.Join(localFormulaRoot, filepath.FromSlash(target.Module))
 	if _, err := os.Stat(filepath.Join(dir, "versions.json")); err != nil {
-		return remotebuild.Target{}, fmt.Errorf("local formula for %s: %w", target.Module, err)
+		return fmt.Errorf("local formula for %s: %w", target.Module, err)
 	}
-	target.FormulaDir = dir
-	return target, nil
+	return nil
+}
+
+func localMakeTarget(target remotebuild.Target) string {
+	root, err := filepath.Abs(localFormulaRoot)
+	if err != nil {
+		root = localFormulaRoot
+	}
+	return filepath.Join(root, filepath.FromSlash(target.Module)) + "@" + target.Version
 }
 
 func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remotebuild.TargetArtifact) error {

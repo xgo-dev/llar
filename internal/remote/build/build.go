@@ -12,9 +12,8 @@ import (
 )
 
 type Target struct {
-	Module     string
-	Version    string
-	FormulaDir string
+	Module  string
+	Version string
 }
 
 type Matrix struct {
@@ -23,9 +22,10 @@ type Matrix struct {
 }
 
 type Request struct {
-	Target    Target
-	MatrixStr string
-	Matrix    Matrix
+	Target     Target
+	MakeTarget string
+	MatrixStr  string
+	Matrix     Matrix
 }
 
 type TargetArtifact struct {

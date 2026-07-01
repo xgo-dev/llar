@@ -29,22 +29,25 @@ func runLLARMake(ctx context.Context, req Request, info io.Writer) (makeResult, 
 
 	archivePath := filepath.Join(dir, "artifact.tar.gz")
 	target := req.Target.Module + "@" + req.Target.Version
-	if req.Target.FormulaDir != "" {
-		formulaDir := req.Target.FormulaDir
-		if !filepath.IsAbs(formulaDir) {
-			formulaDir, err = filepath.Abs(formulaDir)
-			if err != nil {
-				return makeResult{}, err
+	cmdDir := workDir
+	if req.MakeTarget != "" {
+		target = req.MakeTarget
+		pattern := target
+		version := ""
+		if i := strings.LastIndex(pattern, "@"); i >= 0 {
+			version = pattern[i:]
+			pattern = pattern[:i]
+		}
+		if filepath.IsAbs(pattern) {
+			if resolved, err := filepath.EvalSymlinks(pattern); err == nil {
+				pattern = resolved
+				target = pattern + version
 			}
+			cmdDir = filepath.Dir(pattern)
 		}
-		localFormulaDir := filepath.Join(workDir, "formula")
-		if err := os.CopyFS(localFormulaDir, os.DirFS(formulaDir)); err != nil {
-			return makeResult{}, err
-		}
-		target = "./formula@" + req.Target.Version
 	}
 	cmd := exec.CommandContext(ctx, "llar", "make", "-v", "-o", archivePath, target)
-	cmd.Dir = workDir
+	cmd.Dir = cmdDir
 	cmd.Env = append(os.Environ(), "HOME="+homeDir)
 
 	var stdout bytes.Buffer
