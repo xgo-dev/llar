@@ -90,7 +90,15 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 	}
 
 	ch := b.flights.DoChan(flightKey(key), func() (any, error) {
-		return b.makeUploadStore(ctx, req, key, modulePath, matrixStr, info)
+		made, err := b.make(ctx, req, info)
+		if err != nil {
+			return nil, err
+		}
+		uploaded, archiveType, uploadType, err := b.upload(ctx, req, modulePath, matrixStr, made)
+		if err != nil {
+			return nil, err
+		}
+		return b.put(ctx, req, key, modulePath, made, uploaded, archiveType, uploadType)
 	})
 	select {
 	case result := <-ch:
@@ -101,18 +109,6 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-}
-
-func (b *Builds) makeUploadStore(ctx context.Context, req Request, key artifact.Key, modulePath, matrixStr string, info io.Writer) ([]TargetArtifact, error) {
-	made, err := b.make(ctx, req, info)
-	if err != nil {
-		return nil, err
-	}
-	uploaded, archiveType, uploadType, err := b.upload(ctx, req, modulePath, matrixStr, made)
-	if err != nil {
-		return nil, err
-	}
-	return b.put(ctx, req, key, modulePath, made, uploaded, archiveType, uploadType)
 }
 
 func (b *Builds) make(ctx context.Context, req Request, info io.Writer) (makeResult, error) {
