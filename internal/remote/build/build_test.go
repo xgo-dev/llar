@@ -72,6 +72,19 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 		if gotKey != key {
 			t.Fatalf("Put key = %+v, want %+v", gotKey, key)
 		}
+		if candidate != (artifact.Artifact{}) {
+			t.Fatalf("Put artifact = %+v, want empty placeholder", candidate)
+		}
+		return artifact.Artifact{}, nil
+	}
+	store.getOrUpdate = func(gotKey artifact.Key, update func() (artifact.Artifact, error)) (artifact.Artifact, error) {
+		if gotKey != key {
+			t.Fatalf("GetOrUpdate key = %+v, want %+v", gotKey, key)
+		}
+		candidate, err := update()
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
 		wantCandidate := artifact.Artifact{
 			Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:candidate"},
 			Type:     "tar.gz",
@@ -79,7 +92,7 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 			Checksum: "candidate",
 		}
 		if candidate != wantCandidate {
-			t.Fatalf("Put artifact = %+v, want %+v", candidate, wantCandidate)
+			t.Fatalf("updated artifact = %+v, want %+v", candidate, wantCandidate)
 		}
 		return canonical, nil
 	}
@@ -123,6 +136,12 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 	}
 	if payloads := uploader.Payloads(); !reflect.DeepEqual(payloads, []string{"archive"}) {
 		t.Fatalf("upload payloads = %+v, want [archive]", payloads)
+	}
+	if store.GetOrUpdateCalls() != 1 {
+		t.Fatalf("store GetOrUpdate calls = %d, want 1", store.GetOrUpdateCalls())
+	}
+	if store.PutCalls() != 1 {
+		t.Fatalf("store Put calls = %d, want 1", store.PutCalls())
 	}
 }
 
@@ -263,6 +282,9 @@ func TestBuildJoinsConcurrentBuildsForSameArtifactKey(t *testing.T) {
 	}
 	if uploader.Calls() != 1 {
 		t.Fatalf("uploader calls = %d, want 1", uploader.Calls())
+	}
+	if store.GetOrUpdateCalls() != 1 {
+		t.Fatalf("store GetOrUpdate calls = %d, want 1", store.GetOrUpdateCalls())
 	}
 	if store.PutCalls() != 1 {
 		t.Fatalf("store Put calls = %d, want 1", store.PutCalls())
@@ -511,11 +533,13 @@ func helperCalls(t *testing.T, path string) int {
 }
 
 type fakeStore struct {
-	mu        sync.Mutex
-	artifacts map[artifact.Key]artifact.Artifact
-	put       func(artifact.Key, artifact.Artifact) (artifact.Artifact, error)
-	getCalls  int
-	putCalls  int
+	mu               sync.Mutex
+	artifacts        map[artifact.Key]artifact.Artifact
+	put              func(artifact.Key, artifact.Artifact) (artifact.Artifact, error)
+	getOrUpdate      func(artifact.Key, func() (artifact.Artifact, error)) (artifact.Artifact, error)
+	getCalls         int
+	putCalls         int
+	getOrUpdateCalls int
 }
 
 func newFakeStore() *fakeStore {
@@ -527,6 +551,9 @@ func (s *fakeStore) Get(ctx context.Context, key artifact.Key) (artifact.Artifac
 	defer s.mu.Unlock()
 	s.getCalls++
 	got, ok := s.artifacts[key]
+	if ok && got.Source.URL == "" {
+		return artifact.Artifact{}, false, nil
+	}
 	return got, ok, nil
 }
 
@@ -544,6 +571,31 @@ func (s *fakeStore) Put(ctx context.Context, key artifact.Key, value artifact.Ar
 	return value, nil
 }
 
+func (s *fakeStore) GetOrUpdate(ctx context.Context, key artifact.Key, update func() (artifact.Artifact, error)) (artifact.Artifact, error) {
+	s.mu.Lock()
+	s.getOrUpdateCalls++
+	if got, ok := s.artifacts[key]; ok && got.Source.URL != "" {
+		s.mu.Unlock()
+		return got, nil
+	}
+	if s.getOrUpdate != nil {
+		s.mu.Unlock()
+		return s.getOrUpdate(key, update)
+	}
+	s.mu.Unlock()
+	got, err := update()
+	if err != nil {
+		return artifact.Artifact{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.artifacts[key]; ok && existing.Source.URL != "" {
+		return existing, nil
+	}
+	s.artifacts[key] = got
+	return got, nil
+}
+
 func (s *fakeStore) Delete(ctx context.Context, key artifact.Key) error {
 	return errors.New("Delete should not be called")
 }
@@ -558,6 +610,12 @@ func (s *fakeStore) PutCalls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.putCalls
+}
+
+func (s *fakeStore) GetOrUpdateCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getOrUpdateCalls
 }
 
 type fakeUploader struct {

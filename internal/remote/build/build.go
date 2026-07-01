@@ -90,15 +90,56 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 	}
 
 	ch := b.flights.DoChan(flightKey(key), func() (any, error) {
-		made, err := b.make(ctx, req, info)
+		// GHCR tags are mutable. If two workers upload the same artifact key, the
+		// last push wins, so GHCR cannot decide the canonical artifact. The artifact
+		// row is the lock and source of truth.
+		//
+		// Example key: madler/zlib@v1.3.1 linux/amd64
+		//
+		// Scenario 1: artifact exists
+		//   worker B -> Put(empty placeholder) -> source_url != ""
+		//   worker B -> return worker A's artifact without make/upload
+		//
+		// Scenario 2: artifact does not exist
+		//   worker A -> Put(empty placeholder) -> source_url == ""
+		//   worker A -> GetOrUpdate -> lock row -> make/upload -> update source_url
+		//   worker B -> wait for the row lock -> source_url != "" -> return A's artifact
+		stored, err := b.store.Put(ctx, key, artifact.Artifact{})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("put artifact placeholder: %w", err)
 		}
-		uploaded, archiveType, uploadType, err := b.upload(ctx, req, modulePath, matrixStr, made)
+		if stored.Source.URL != "" {
+			return []TargetArtifact{{
+				Target:   modulePath + "@" + req.Target.Version,
+				Artifact: stored,
+			}}, nil
+		}
+		stored, err = b.store.GetOrUpdate(ctx, key, func() (artifact.Artifact, error) {
+			made, err := b.make(ctx, req, info)
+			if err != nil {
+				return artifact.Artifact{}, err
+			}
+			uploaded, archiveType, uploadType, err := b.upload(ctx, req, modulePath, matrixStr, made)
+			if err != nil {
+				return artifact.Artifact{}, err
+			}
+			return artifact.Artifact{
+				Source: artifact.Source{
+					Type: uploadType,
+					URL:  uploaded.URL,
+				},
+				Type:     archiveType,
+				Metadata: made.Metadata,
+				Checksum: uploaded.Checksum,
+			}, nil
+		})
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("get or update artifact: %w", err)
 		}
-		return b.put(ctx, req, key, modulePath, made, uploaded, archiveType, uploadType)
+		return []TargetArtifact{{
+			Target:   modulePath + "@" + req.Target.Version,
+			Artifact: stored,
+		}}, nil
 	})
 	select {
 	case result := <-ch:
@@ -146,25 +187,6 @@ func (b *Builds) upload(ctx context.Context, req Request, modulePath, matrixStr 
 		return upload.Result{}, "", "", fmt.Errorf("upload artifact: %w", err)
 	}
 	return uploaded, archiveType, uploadType, nil
-}
-
-func (b *Builds) put(ctx context.Context, req Request, key artifact.Key, modulePath string, made makeResult, uploaded upload.Result, archiveType, uploadType string) ([]TargetArtifact, error) {
-	stored, err := b.store.Put(ctx, key, artifact.Artifact{
-		Source: artifact.Source{
-			Type: uploadType,
-			URL:  uploaded.URL,
-		},
-		Type:     archiveType,
-		Metadata: made.Metadata,
-		Checksum: uploaded.Checksum,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("put artifact: %w", err)
-	}
-	return []TargetArtifact{{
-		Target:   modulePath + "@" + req.Target.Version,
-		Artifact: stored,
-	}}, nil
 }
 
 func targetModulePath(target Target) (string, error) {

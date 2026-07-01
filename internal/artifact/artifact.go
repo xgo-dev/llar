@@ -23,5 +23,6 @@ type Artifact struct {
 type Store interface {
 	Get(ctx context.Context, key Key) (Artifact, bool, error)
 	Put(ctx context.Context, key Key, artifact Artifact) (Artifact, error)
+	GetOrUpdate(ctx context.Context, key Key, update func() (Artifact, error)) (Artifact, error)
 	Delete(ctx context.Context, key Key) error
 }
