@@ -7,6 +7,7 @@ import (
 
 type Options struct {
 	Name  string
+	Tag   string
 	Type  string
 	Attrs map[string]string
 }

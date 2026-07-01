@@ -43,7 +43,8 @@ func TestGHCRUploadIntegrationMeteorsLiuLlar(t *testing.T) {
 
 	tag := "llard-upload-test-" + time.Now().UTC().Format("20060102T150405Z")
 	got, err := uploader.Upload(context.Background(), artifact, Options{
-		Name: "MeteorsLiu/llar:" + tag,
+		Name: "MeteorsLiu/llar",
+		Tag:  tag,
 		Type: "tar.gz",
 		Attrs: map[string]string{
 			"org.llar.matrix": "madler-zlib-host",

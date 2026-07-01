@@ -44,7 +44,7 @@ func (u ghcrUploader) Type() string {
 }
 
 func (u ghcrUploader) Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error) {
-	ref, err := parseGHCRName(opts.Name, u.cfg.Owner)
+	ref, err := parseGHCRName(opts.Name, opts.Tag, u.cfg.Owner)
 	if err != nil {
 		return Result{}, err
 	}
@@ -122,18 +122,16 @@ func (r ghcrRef) String() string {
 	return "ghcr.io/" + r.repo + ":" + r.tag
 }
 
-func parseGHCRName(rawName, owner string) (ghcrRef, error) {
+func parseGHCRName(rawName, tag, owner string) (ghcrRef, error) {
 	rawName = strings.TrimSpace(strings.TrimPrefix(rawName, "ghcr.io/"))
 	if rawName == "" {
 		return ghcrRef{}, errors.New("ghcr name is required")
 	}
-	lastSlash := strings.LastIndex(rawName, "/")
-	lastColon := strings.LastIndex(rawName, ":")
-	if lastColon <= lastSlash || lastColon == len(rawName)-1 {
-		return ghcrRef{}, fmt.Errorf("ghcr name must include tag: %q", rawName)
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return ghcrRef{}, errors.New("ghcr tag is required")
 	}
-	repo := strings.Trim(rawName[:lastColon], "/")
-	tag := rawName[lastColon+1:]
+	repo := strings.Trim(rawName, "/")
 	if owner != "" {
 		owner = strings.Trim(owner, "/")
 		if repo != owner && !strings.HasPrefix(repo, owner+"/") {
