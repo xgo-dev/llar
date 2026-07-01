@@ -157,6 +157,31 @@ func TestGHCRUploaderAcceptsGitHubStyleOwnerCase(t *testing.T) {
 	}
 }
 
+func TestGHCRUploaderPassesConfiguredUsernameToWriter(t *testing.T) {
+	writer := &recordingIndexWriter{}
+	uploader := ghcrUploader{
+		cfg: GHCRConfig{
+			Owner:    "MeteorsLiu",
+			Username: "MeteorsLiu",
+			Token:    "publish-token",
+		},
+		writeIndex: writer.write,
+	}
+
+	if _, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("archive")), Options{
+		Name: "MeteorsLiu/llar:test",
+		Type: "tar.gz",
+	}); err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if writer.username != "MeteorsLiu" {
+		t.Fatalf("username = %q, want MeteorsLiu", writer.username)
+	}
+	if writer.token != "publish-token" {
+		t.Fatalf("token = %q, want publish-token", writer.token)
+	}
+}
+
 func TestPlatformFromAttrsAllowsPartialPlatform(t *testing.T) {
 	got := platformFromAttrs(map[string]string{"os": "linux"})
 	if got == nil || got.OS != "linux" || got.Architecture != "" {
@@ -176,12 +201,16 @@ func TestPlatformFromAttrsAllowsPartialPlatform(t *testing.T) {
 }
 
 type recordingIndexWriter struct {
-	ref   string
-	index v1.ImageIndex
+	ref      string
+	index    v1.ImageIndex
+	username string
+	token    string
 }
 
 func (w *recordingIndexWriter) write(ctx context.Context, ref string, index v1.ImageIndex, username, token string) error {
 	w.ref = ref
 	w.index = index
+	w.username = username
+	w.token = token
 	return nil
 }
