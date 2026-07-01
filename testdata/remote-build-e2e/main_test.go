@@ -15,18 +15,20 @@ import (
 func TestAssertTargetArtifactRejectsChecksumURLMismatch(t *testing.T) {
 	cfg := configData{ghcrOwner: "MeteorsLiu"}
 	target := remotebuild.Target{Module: "madler/zlib", Version: "v1.3.1"}
-	got := []remotebuild.TargetArtifact{{
-		Target: target.Module + "@" + target.Version,
-		Artifact: artifact.Artifact{
-			Source: artifact.Source{
-				Type: "ghcr",
-				URL:  "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	got := remotebuild.Result{
+		TargetArtifact: remotebuild.TargetArtifact{
+			Target: target.Module + "@" + target.Version,
+			Artifact: artifact.Artifact{
+				Source: artifact.Source{
+					Type: "ghcr",
+					URL:  "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				},
+				Type:     "tar.gz",
+				Metadata: "-lz",
+				Checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 			},
-			Type:     "tar.gz",
-			Metadata: "-lz",
-			Checksum: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		},
-	}}
+	}
 
 	err := assertTargetArtifact(cfg, target, got)
 	if err == nil {

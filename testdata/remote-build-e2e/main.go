@@ -226,7 +226,7 @@ type suite struct {
 	baseReq      remotebuild.Request
 	baseBuilds   *remotebuild.Builds
 	baseUploader *countingUploader
-	base         []remotebuild.TargetArtifact
+	base         remotebuild.Result
 }
 
 func (s *suite) coldBuild(ctx context.Context) error {
@@ -246,13 +246,13 @@ func (s *suite) coldBuild(ctx context.Context) error {
 	if err := assertTargetArtifact(s.cfg, s.cfg.target, got); err != nil {
 		return err
 	}
-	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, s.baseReq.Matrix, got[0].Artifact); err != nil {
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, s.baseReq.Matrix, got.TargetArtifact.Artifact); err != nil {
 		return err
 	}
 	if err := assertUploadOptions(s.baseUploader.Options()[0], s.cfg.target, s.baseReq); err != nil {
 		return err
 	}
-	if err := assertStoredArtifact(ctx, s.store, s.cfg.target, s.baseReq.Matrix.Combinations()[0], got[0].Artifact); err != nil {
+	if err := assertStoredArtifact(ctx, s.store, s.cfg.target, s.baseReq.Matrix.Combinations()[0], got.TargetArtifact.Artifact); err != nil {
 		return err
 	}
 	s.base = got
@@ -267,7 +267,7 @@ func (s *suite) repeatedBuild(ctx context.Context) error {
 	if !reflect.DeepEqual(got, s.base) {
 		return fmt.Errorf("Build = %+v, want %+v", got, s.base)
 	}
-	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, s.baseReq.Matrix, got[0].Artifact); err != nil {
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, s.baseReq.Matrix, got.TargetArtifact.Artifact); err != nil {
 		return err
 	}
 	if s.baseUploader.Calls() != 1 {
@@ -287,7 +287,7 @@ func (s *suite) persistedCache(ctx context.Context) error {
 	if !reflect.DeepEqual(got, s.base) {
 		return fmt.Errorf("Build = %+v, want %+v", got, s.base)
 	}
-	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, s.baseReq.Matrix, got[0].Artifact); err != nil {
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, s.baseReq.Matrix, got.TargetArtifact.Artifact); err != nil {
 		return err
 	}
 	if uploader.Calls() != 0 {
@@ -314,13 +314,13 @@ func (s *suite) differentMatrix(ctx context.Context) error {
 	if err := assertTargetArtifact(s.cfg, s.cfg.target, got); err != nil {
 		return err
 	}
-	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, req.Matrix, got[0].Artifact); err != nil {
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, req.Matrix, got.TargetArtifact.Artifact); err != nil {
 		return err
 	}
 	if err := assertUploadOptions(uploader.Options()[0], s.cfg.target, req); err != nil {
 		return err
 	}
-	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.Matrix.Combinations()[0], got[0].Artifact)
+	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.Matrix.Combinations()[0], got.TargetArtifact.Artifact)
 }
 
 func (s *suite) concurrentDuplicate(ctx context.Context) error {
@@ -366,13 +366,13 @@ func (s *suite) concurrentDuplicate(ctx context.Context) error {
 	if err := assertTargetArtifact(s.cfg, s.cfg.target, first.artifacts); err != nil {
 		return err
 	}
-	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, req.Matrix, first.artifacts[0].Artifact); err != nil {
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, req.Matrix, first.artifacts.TargetArtifact.Artifact); err != nil {
 		return err
 	}
 	if err := assertUploadOptions(uploader.Options()[0], s.cfg.target, req); err != nil {
 		return err
 	}
-	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.Matrix.Combinations()[0], first.artifacts[0].Artifact)
+	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.Matrix.Combinations()[0], first.artifacts.TargetArtifact.Artifact)
 }
 
 func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
@@ -396,7 +396,7 @@ func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
 	}
 	close(start)
 
-	gotByTarget := make(map[string][]remotebuild.TargetArtifact, len(s.cfg.sharedTargets))
+	gotByTarget := make(map[string]remotebuild.Result, len(s.cfg.sharedTargets))
 	for range s.cfg.sharedTargets {
 		result, err := waitNamedBuildResult(ctx, results)
 		if err != nil {
@@ -408,16 +408,19 @@ func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
 		if err := assertTargetArtifact(s.cfg, result.target, result.artifacts); err != nil {
 			return err
 		}
-		if err := assertGHCRArtifact(ctx, s.cfg, result.target, result.req.Matrix, result.artifacts[0].Artifact); err != nil {
+		if err := assertGHCRArtifact(ctx, s.cfg, result.target, result.req.Matrix, result.artifacts.TargetArtifact.Artifact); err != nil {
 			return err
 		}
-		if err := assertArtifactDeps(ctx, s.cfg, result.artifacts[0].Artifact, []string{sharedDependency}); err != nil {
+		if err := assertArtifactDeps(ctx, s.cfg, result.artifacts.TargetArtifact.Artifact, []string{sharedDependency}); err != nil {
 			return err
 		}
-		if err := assertStoredArtifact(ctx, s.store, result.target, result.req.Matrix.Combinations()[0], result.artifacts[0].Artifact); err != nil {
+		if err := assertResultDeps(result.artifacts, []remotebuild.Target{{Module: "madler/zlib", Version: "v1.3.1"}}); err != nil {
 			return err
 		}
-		gotByTarget[result.artifacts[0].Target] = result.artifacts
+		if err := assertStoredArtifact(ctx, s.store, result.target, result.req.Matrix.Combinations()[0], result.artifacts.TargetArtifact.Artifact); err != nil {
+			return err
+		}
+		gotByTarget[result.artifacts.TargetArtifact.Target] = result.artifacts
 	}
 	if uploader.Calls() != len(s.cfg.sharedTargets) {
 		return fmt.Errorf("uploader calls = %d, want %d", uploader.Calls(), len(s.cfg.sharedTargets))
@@ -577,11 +580,8 @@ func localFormulaPath(target remotebuild.Target) string {
 	return filepath.Join(root, filepath.FromSlash(target.Module))
 }
 
-func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remotebuild.TargetArtifact) error {
-	if len(got) != 1 {
-		return fmt.Errorf("artifact count = %d, want 1: %+v", len(got), got)
-	}
-	artifact := got[0]
+func assertTargetArtifact(cfg configData, target remotebuild.Target, got remotebuild.Result) error {
+	artifact := got.TargetArtifact
 	wantTarget := target.Module + "@" + target.Version
 	if artifact.Target != wantTarget {
 		return fmt.Errorf("target = %q, want %q", artifact.Target, wantTarget)
@@ -608,6 +608,13 @@ func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remot
 	}
 	if artifact.Artifact.Checksum != digest {
 		return fmt.Errorf("checksum = %q, want source digest %q", artifact.Artifact.Checksum, digest)
+	}
+	return nil
+}
+
+func assertResultDeps(got remotebuild.Result, want []remotebuild.Target) error {
+	if !reflect.DeepEqual(got.Deps, want) {
+		return fmt.Errorf("result deps = %+v, want %+v", got.Deps, want)
 	}
 	return nil
 }
@@ -989,14 +996,14 @@ func (u *countingUploader) Options() []upload.Options {
 }
 
 type buildResult struct {
-	artifacts []remotebuild.TargetArtifact
+	artifacts remotebuild.Result
 	err       error
 }
 
 type namedBuildResult struct {
 	target    remotebuild.Target
 	req       remotebuild.Request
-	artifacts []remotebuild.TargetArtifact
+	artifacts remotebuild.Result
 	err       error
 }
 

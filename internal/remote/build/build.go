@@ -34,10 +34,16 @@ type TargetArtifact struct {
 	Artifact artifact.Artifact
 }
 
+type Result struct {
+	TargetArtifact TargetArtifact
+	Deps           []Target
+}
+
 type makeResult struct {
 	Archive  io.ReadSeeker
 	Type     string
 	Metadata string
+	Deps     []Target
 }
 
 type Options struct {
@@ -61,16 +67,16 @@ func New(opts Options) *Builds {
 	}
 }
 
-func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]TargetArtifact, error) {
+func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) (Result, error) {
 	if isLocalTarget(req.Target.Module) && !AllowLocal {
-		return nil, fmt.Errorf("local target module is not allowed: %s", req.Target.Module)
+		return Result{}, fmt.Errorf("local target module is not allowed: %s", req.Target.Module)
 	}
 	if b.store == nil {
-		return nil, errors.New("build store is required")
+		return Result{}, errors.New("build store is required")
 	}
 	modulePath, err := targetModulePath(req.Target)
 	if err != nil {
-		return nil, err
+		return Result{}, err
 	}
 	matrixStr := req.Matrix.Combinations()[0]
 	key := artifact.Key{
@@ -80,13 +86,15 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 	}
 	stored, ok, err := b.store.Get(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("get artifact: %w", err)
+		return Result{}, fmt.Errorf("get artifact: %w", err)
 	}
 	if ok {
-		return []TargetArtifact{{
-			Target:   modulePath + "@" + req.Target.Version,
-			Artifact: stored,
-		}}, nil
+		return Result{
+			TargetArtifact: TargetArtifact{
+				Target:   modulePath + "@" + req.Target.Version,
+				Artifact: stored,
+			},
+		}, nil
 	}
 
 	ch := b.flights.DoChan(flightKey(key), func() (any, error) {
@@ -109,16 +117,20 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 			return nil, fmt.Errorf("put artifact placeholder: %w", err)
 		}
 		if stored.Source.URL != "" {
-			return []TargetArtifact{{
-				Target:   modulePath + "@" + req.Target.Version,
-				Artifact: stored,
-			}}, nil
+			return Result{
+				TargetArtifact: TargetArtifact{
+					Target:   modulePath + "@" + req.Target.Version,
+					Artifact: stored,
+				},
+			}, nil
 		}
+		var deps []Target
 		stored, err = b.store.GetOrUpdate(ctx, key, func() (artifact.Artifact, error) {
 			made, err := b.make(ctx, req, info)
 			if err != nil {
 				return artifact.Artifact{}, err
 			}
+			deps = made.Deps
 			// TODO: When llar make can expose dependency artifacts, upload and
 			// Put those artifacts here too. Remote build currently stores only
 			// the root target artifact returned by llar make.
@@ -139,19 +151,22 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 		if err != nil {
 			return nil, fmt.Errorf("get or update artifact: %w", err)
 		}
-		return []TargetArtifact{{
-			Target:   modulePath + "@" + req.Target.Version,
-			Artifact: stored,
-		}}, nil
+		return Result{
+			TargetArtifact: TargetArtifact{
+				Target:   modulePath + "@" + req.Target.Version,
+				Artifact: stored,
+			},
+			Deps: deps,
+		}, nil
 	})
 	select {
 	case result := <-ch:
 		if result.Err != nil {
-			return nil, result.Err
+			return Result{}, result.Err
 		}
-		return result.Val.([]TargetArtifact), nil
+		return result.Val.(Result), nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return Result{}, ctx.Err()
 	}
 }
 

@@ -2,6 +2,7 @@ package build
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -41,10 +42,12 @@ func TestBuildReturnsStoredArtifactWithoutRunningMakeOrUpload(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	want := []TargetArtifact{{
-		Target:   "madler/zlib@v1.3.1",
-		Artifact: stored,
-	}}
+	want := Result{
+		TargetArtifact: TargetArtifact{
+			Target:   "madler/zlib@v1.3.1",
+			Artifact: stored,
+		},
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Build = %+v, want %+v", got, want)
 	}
@@ -68,6 +71,7 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 		Checksum: "stored",
 	}
 	store := newFakeStore()
+	t.Setenv("LLAR_MAKE_DEPS", "dep/one@v1.0.0,dep/two@v2.0.0")
 	store.put = func(gotKey artifact.Key, candidate artifact.Artifact) (artifact.Artifact, error) {
 		if gotKey != key {
 			t.Fatalf("Put key = %+v, want %+v", gotKey, key)
@@ -111,10 +115,16 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	want := []TargetArtifact{{
-		Target:   "madler/zlib@v1.3.1",
-		Artifact: canonical,
-	}}
+	want := Result{
+		TargetArtifact: TargetArtifact{
+			Target:   "madler/zlib@v1.3.1",
+			Artifact: canonical,
+		},
+		Deps: []Target{
+			{Module: "dep/one", Version: "v1.0.0"},
+			{Module: "dep/two", Version: "v2.0.0"},
+		},
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Build = %+v, want %+v", got, want)
 	}
@@ -184,7 +194,7 @@ func TestBuildRunsMakeWithLocalTargetPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if len(got) != 1 || got[0].Target != "madler/zlib@v1.3.1" {
+	if got.TargetArtifact.Target != "madler/zlib@v1.3.1" {
 		t.Fatalf("Build target = %+v, want madler/zlib@v1.3.1", got)
 	}
 	if got := uploader.Options()[0].Name; got != "madler/zlib" {
@@ -340,7 +350,7 @@ func TestBuildUploadOmitsAttrsForNonGHCRUploader(t *testing.T) {
 }
 
 type buildCall struct {
-	result []TargetArtifact
+	result Result
 	err    error
 }
 
@@ -394,8 +404,19 @@ func TestLLARMakeHelperProcess(t *testing.T) {
 	if len(args) > 0 {
 		args = args[1:]
 	}
-	if len(args) < 4 || args[0] != "make" {
-		_, _ = os.Stderr.WriteString("usage: llar make -o output target\n")
+	if len(args) < 5 || args[0] != "make" {
+		_, _ = os.Stderr.WriteString("usage: llar make --json -o output target\n")
+		os.Exit(2)
+	}
+	hasJSON := false
+	for _, arg := range args {
+		if arg == "--json" {
+			hasJSON = true
+			break
+		}
+	}
+	if !hasJSON {
+		_, _ = os.Stderr.WriteString("missing --json\n")
 		os.Exit(2)
 	}
 	if calls := os.Getenv("LLAR_MAKE_CALLS_FILE"); calls != "" {
@@ -485,8 +506,55 @@ func TestLLARMakeHelperProcess(t *testing.T) {
 		_, _ = os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(4)
 	}
-	_, _ = os.Stdout.WriteString("-lz\n")
+	target := args[len(args)-1]
+	at := strings.LastIndex(target, "@")
+	if at < 0 {
+		_, _ = os.Stderr.WriteString("target must include version: " + target + "\n")
+		os.Exit(2)
+	}
+	deps, err := helperDeps(os.Getenv("LLAR_MAKE_DEPS"))
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+		os.Exit(5)
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(struct {
+		Path     string        `json:"path"`
+		Version  string        `json:"version"`
+		Deps     []makeJSONDep `json:"deps,omitempty"`
+		Metadata string        `json:"metadata"`
+	}{
+		Path:     target[:at],
+		Version:  target[at+1:],
+		Deps:     deps,
+		Metadata: "-lz",
+	}); err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+		os.Exit(5)
+	}
 	os.Exit(0)
+}
+
+func helperDeps(raw string) ([]makeJSONDep, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	deps := make([]makeJSONDep, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		at := strings.LastIndex(part, "@")
+		if at < 0 {
+			return nil, fmt.Errorf("bad LLAR_MAKE_DEPS target %q", part)
+		}
+		deps = append(deps, makeJSONDep{
+			Path:    part[:at],
+			Version: part[at+1:],
+		})
+	}
+	return deps, nil
 }
 
 func waitForBuildCall(t *testing.T, ch <-chan buildCall) buildCall {
