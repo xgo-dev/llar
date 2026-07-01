@@ -23,7 +23,7 @@ func TestBuildReturnsStoredArtifactWithoutRunningMakeOrUpload(t *testing.T) {
 	req := testRequest()
 	key := artifactKey(req)
 	stored := artifact.Artifact{
-		Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:stored"},
+		Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:stored"},
 		Type:     "tar.gz",
 		Metadata: "-lz",
 		Checksum: "stored",
@@ -62,7 +62,7 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 	req := testRequest()
 	key := artifactKey(req)
 	canonical := artifact.Artifact{
-		Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:stored"},
+		Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:stored"},
 		Type:     "tar.gz",
 		Metadata: "-lz-canonical",
 		Checksum: "stored",
@@ -73,7 +73,7 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 			t.Fatalf("Put key = %+v, want %+v", gotKey, key)
 		}
 		wantCandidate := artifact.Artifact{
-			Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:candidate"},
+			Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:candidate"},
 			Type:     "tar.gz",
 			Metadata: "-lz",
 			Checksum: "candidate",
@@ -85,7 +85,7 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 	}
 	uploader := &fakeUploader{
 		result: upload.Result{
-			URL:      "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:candidate",
+			URL:      "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:candidate",
 			Checksum: "candidate",
 		},
 	}
@@ -153,7 +153,7 @@ func TestBuildRunsMakeWithLocalTargetPath(t *testing.T) {
 	req.Target.Module = formulaDir
 	uploader := &fakeUploader{
 		result: upload.Result{
-			URL:      "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:abc",
+			URL:      "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:abc",
 			Checksum: "abc",
 		},
 	}
@@ -208,7 +208,7 @@ func TestBuildJoinsConcurrentBuildsForSameArtifactKey(t *testing.T) {
 	store := newFakeStore()
 	uploader := &fakeUploader{
 		result: upload.Result{
-			URL:      "https://ghcr.io/v2/owner/madler/zlib/blobs/sha256:abc",
+			URL:      "https://ghcr.io/v2/meteorsliu/madler/zlib/blobs/sha256:abc",
 			Checksum: "abc",
 		},
 	}
