@@ -1,8 +1,11 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -37,6 +40,7 @@ const (
 	defaultTarget        = "madler/zlib@v1.3.1"
 	defaultSharedTargets = "DaveGamble/cJSON@v1.7.18,pnggroup/libpng@v1.6.47"
 	localFormulaRoot     = "testdata/remote-build-e2e/formulas"
+	sharedDependency     = "madler/zlib@v1.3.1"
 )
 
 func main() {
@@ -184,7 +188,7 @@ func run(cfg config) error {
 		{"new builds instance uses persisted artifact cache", e2e.persistedCache},
 		{"different matrix stores independent artifact", e2e.differentMatrix},
 		{"concurrent duplicate build joins singleflight", e2e.concurrentDuplicate},
-		{"concurrent different targets both complete", e2e.concurrentDifferentTargets},
+		{"concurrent targets sharing dependency both complete", e2e.concurrentDifferentTargets},
 	} {
 		start := time.Now()
 		log.Printf("RUN %s", step.name)
@@ -405,6 +409,9 @@ func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
 			return err
 		}
 		if err := assertGHCRArtifact(ctx, s.cfg, result.target, result.req.Matrix, result.artifacts[0].Artifact); err != nil {
+			return err
+		}
+		if err := assertArtifactDeps(ctx, s.cfg, result.artifacts[0].Artifact, []string{sharedDependency}); err != nil {
 			return err
 		}
 		if err := assertStoredArtifact(ctx, s.store, result.target, result.req.Matrix.Combinations()[0], result.artifacts[0].Artifact); err != nil {
@@ -726,33 +733,13 @@ func assertGHCRPlatform(platform *v1.Platform, matrix formula.Matrix) error {
 }
 
 func assertGHCRBlob(ctx context.Context, cfg configData, sourceURL, checksum string) (int64, error) {
-	digest, err := sourceDigest(sourceURL)
+	body, err := readGHCRBlob(ctx, cfg, sourceURL, checksum)
 	if err != nil {
 		return 0, err
 	}
-	if checksum != digest {
-		return 0, fmt.Errorf("checksum = %q, want source digest %q", checksum, digest)
-	}
-	repo, err := sourceRepo(sourceURL)
+	hash, size, err := v1.SHA256(bytes.NewReader(body))
 	if err != nil {
-		return 0, err
-	}
-	ref, err := name.NewDigest("ghcr.io/"+repo+"@sha256:"+digest, name.WeakValidation)
-	if err != nil {
-		return 0, fmt.Errorf("GHCR blob ref: %w", err)
-	}
-	layer, err := remote.Layer(ref, ghcrRemoteOptions(ctx, cfg)...)
-	if err != nil {
-		return 0, fmt.Errorf("read GHCR blob %s: %w", ref.String(), err)
-	}
-	r, err := layer.Compressed()
-	if err != nil {
-		return 0, fmt.Errorf("open GHCR blob %s: %w", ref.String(), err)
-	}
-	defer r.Close()
-	hash, size, err := v1.SHA256(r)
-	if err != nil {
-		return 0, fmt.Errorf("hash GHCR blob %s: %w", ref.String(), err)
+		return 0, fmt.Errorf("hash GHCR blob %s: %w", sourceURL, err)
 	}
 	if hash.Hex != checksum {
 		return 0, fmt.Errorf("GHCR blob checksum = %s, want %s", hash.Hex, checksum)
@@ -761,6 +748,84 @@ func assertGHCRBlob(ctx context.Context, cfg configData, sourceURL, checksum str
 		return 0, fmt.Errorf("GHCR blob size = %d, want positive", size)
 	}
 	return size, nil
+}
+
+func readGHCRBlob(ctx context.Context, cfg configData, sourceURL, checksum string) ([]byte, error) {
+	digest, err := sourceDigest(sourceURL)
+	if err != nil {
+		return nil, err
+	}
+	if checksum != digest {
+		return nil, fmt.Errorf("checksum = %q, want source digest %q", checksum, digest)
+	}
+	repo, err := sourceRepo(sourceURL)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := name.NewDigest("ghcr.io/"+repo+"@sha256:"+digest, name.WeakValidation)
+	if err != nil {
+		return nil, fmt.Errorf("GHCR blob ref: %w", err)
+	}
+	layer, err := remote.Layer(ref, ghcrRemoteOptions(ctx, cfg)...)
+	if err != nil {
+		return nil, fmt.Errorf("read GHCR blob %s: %w", ref.String(), err)
+	}
+	r, err := layer.Compressed()
+	if err != nil {
+		return nil, fmt.Errorf("open GHCR blob %s: %w", ref.String(), err)
+	}
+	defer r.Close()
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("read GHCR blob %s: %w", ref.String(), err)
+	}
+	return body, nil
+}
+
+type artifactMetadata struct {
+	Deps []string `json:"deps"`
+}
+
+func assertArtifactDeps(ctx context.Context, cfg configData, got artifact.Artifact, want []string) error {
+	body, err := readGHCRBlob(ctx, cfg, got.Source.URL, got.Checksum)
+	if err != nil {
+		return err
+	}
+	metadata, err := readArtifactMetadata(body)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(metadata.Deps, want) {
+		return fmt.Errorf("artifact deps = %+v, want %+v", metadata.Deps, want)
+	}
+	return nil
+}
+
+func readArtifactMetadata(body []byte) (artifactMetadata, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(body))
+	if err != nil {
+		return artifactMetadata{}, fmt.Errorf("open artifact gzip: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return artifactMetadata{}, fmt.Errorf("artifact metadata missing")
+		}
+		if err != nil {
+			return artifactMetadata{}, fmt.Errorf("read artifact tar: %w", err)
+		}
+		if header.Name != ".llar/metadata.json" {
+			continue
+		}
+		var metadata artifactMetadata
+		if err := json.NewDecoder(tr).Decode(&metadata); err != nil {
+			return artifactMetadata{}, fmt.Errorf("decode artifact metadata: %w", err)
+		}
+		return metadata, nil
+	}
 }
 
 type storedArtifactRow struct {
