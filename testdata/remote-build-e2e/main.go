@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/url"
 	"os"
 	"reflect"
 	"runtime"
@@ -14,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-github/v68/github"
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact"
 	remotebuild "github.com/goplus/llar/internal/remote/build"
@@ -120,6 +123,13 @@ func run(cfg config) error {
 	sharedTargets, err := parseTargets(cfg.sharedTargets)
 	if err != nil {
 		return err
+	}
+	cleanupTargets := append([]remotebuild.Target{target}, sharedTargets...)
+	if err := cleanupGHCRPackages(ctx, ghcrCleanupConfig{
+		Owner: cfg.ghcrOwner,
+		Token: cfg.ghcrToken,
+	}, cleanupTargets); err != nil {
+		return fmt.Errorf("cleanup GHCR packages: %w", err)
 	}
 	matrixStr := strings.TrimSpace(cfg.matrix)
 	if matrixStr == "" {
@@ -383,6 +393,72 @@ func artifactCount(ctx context.Context, db *gorm.DB) int64 {
 		return -1
 	}
 	return count
+}
+
+type ghcrCleanupConfig struct {
+	Owner string
+	Token string
+}
+
+func cleanupGHCRPackages(ctx context.Context, cfg ghcrCleanupConfig, targets []remotebuild.Target) error {
+	owner := strings.TrimSpace(cfg.Owner)
+	token := strings.TrimSpace(cfg.Token)
+	if owner == "" || token == "" {
+		return fmt.Errorf("GHCR cleanup requires owner and token")
+	}
+	client := github.NewClient(nil).WithAuthToken(token)
+	for _, packageName := range ghcrCleanupPackageNames(targets) {
+		if err := deleteGHCRPackage(ctx, client, owner, packageName); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ghcrCleanupPackageNames(targets []remotebuild.Target) []string {
+	seen := make(map[string]bool, len(targets))
+	packages := make([]string, 0, len(targets))
+	for _, target := range targets {
+		name := strings.ToLower(strings.Trim(target.Module, "/"))
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		packages = append(packages, name)
+	}
+	return packages
+}
+
+func deleteGHCRPackage(ctx context.Context, client *github.Client, owner, packageName string) error {
+	if _, err := client.Organizations.DeletePackage(ctx, owner, "container", packageName); err == nil {
+		log.Printf("deleted GHCR package %s/%s", owner, packageName)
+		return nil
+	} else if !isGitHubNotFound(err) {
+		return fmt.Errorf("delete org GHCR package %s/%s: %w", owner, packageName, err)
+	}
+
+	if err := deleteUserPackage(ctx, client, owner, "container", packageName); err == nil {
+		log.Printf("deleted GHCR package %s/%s", owner, packageName)
+		return nil
+	} else if !isGitHubNotFound(err) {
+		return fmt.Errorf("delete user GHCR package %s/%s: %w", owner, packageName, err)
+	}
+	log.Printf("GHCR package %s/%s does not exist", owner, packageName)
+	return nil
+}
+
+func deleteUserPackage(ctx context.Context, client *github.Client, owner, packageType, packageName string) error {
+	req, err := client.NewRequest(http.MethodDelete, "users/"+owner+"/packages/"+packageType+"/"+url.PathEscape(packageName), nil)
+	if err != nil {
+		return err
+	}
+	_, err = client.Do(ctx, req, nil)
+	return err
+}
+
+func isGitHubNotFound(err error) bool {
+	errResp, ok := err.(*github.ErrorResponse)
+	return ok && errResp.Response != nil && errResp.Response.StatusCode == http.StatusNotFound
 }
 
 func requestForTarget(target remotebuild.Target, matrixStr string) remotebuild.Request {
