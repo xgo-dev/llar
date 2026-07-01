@@ -179,7 +179,8 @@ func (b *Builds) upload(ctx context.Context, req Request, modulePath, matrixStr 
 		archiveType = "tar.gz"
 	}
 	uploaded, err := b.uploader.Upload(ctx, made.Archive, upload.Options{
-		Name:  modulePath + ":" + req.Target.Version,
+		Name:  modulePath,
+		Tag:   req.Target.Version,
 		Type:  archiveType,
 		Attrs: uploadAttrs(uploadType, matrixStr, req.Matrix),
 	})

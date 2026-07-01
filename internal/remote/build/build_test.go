@@ -123,7 +123,8 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 		t.Fatalf("upload calls = %d, want 1", len(opts))
 	}
 	wantOptions := upload.Options{
-		Name: "madler/zlib:v1.3.1",
+		Name: "madler/zlib",
+		Tag:  "v1.3.1",
 		Type: "tar.gz",
 		Attrs: map[string]string{
 			"org.llar.matrix": "amd64-linux",
@@ -186,8 +187,11 @@ func TestBuildRunsMakeWithLocalTargetPath(t *testing.T) {
 	if len(got) != 1 || got[0].Target != "madler/zlib@v1.3.1" {
 		t.Fatalf("Build target = %+v, want madler/zlib@v1.3.1", got)
 	}
-	if got := uploader.Options()[0].Name; got != "madler/zlib:v1.3.1" {
-		t.Fatalf("upload name = %q, want madler/zlib:v1.3.1", got)
+	if got := uploader.Options()[0].Name; got != "madler/zlib" {
+		t.Fatalf("upload name = %q, want madler/zlib", got)
+	}
+	if got := uploader.Options()[0].Tag; got != "v1.3.1" {
+		t.Fatalf("upload tag = %q, want v1.3.1", got)
 	}
 
 	data, err := os.ReadFile(argsFile)
