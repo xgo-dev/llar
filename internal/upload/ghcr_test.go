@@ -96,7 +96,8 @@ func TestGHCRUploaderWritesOCIIndexWithArtifactLayer(t *testing.T) {
 		writeIndex: writer.write,
 	}
 	got, err := uploader.Upload(context.Background(), r, Options{
-		Name: "ghcr.io/example/madler/zlib:v1.3.1",
+		Name: "ghcr.io/example/madler/zlib",
+		Tag:  "v1.3.1",
 		Type: "tar.gz",
 		Attrs: map[string]string{
 			"org.llar.matrix": "amd64-linux",
@@ -180,7 +181,8 @@ func TestGHCRUploaderWritesZstdLayerByDefaultingOwner(t *testing.T) {
 	}
 
 	_, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("archive")), Options{
-		Name: "llar:test",
+		Name: "llar",
+		Tag:  "test",
 		Type: "tar.zst",
 		Attrs: map[string]string{
 			"org.llar.matrix": "arm64-darwin",
@@ -217,7 +219,7 @@ func TestGHCRUploaderReportsUploadErrors(t *testing.T) {
 		u    ghcrUploader
 	}{
 		{
-			name: "invalid name",
+			name: "missing tag",
 			r:    bytes.NewReader([]byte("archive")),
 			opts: Options{Name: "MeteorsLiu/llar"},
 			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
@@ -225,31 +227,31 @@ func TestGHCRUploaderReportsUploadErrors(t *testing.T) {
 		{
 			name: "unsupported archive type",
 			r:    bytes.NewReader([]byte("archive")),
-			opts: Options{Name: "MeteorsLiu/llar:test", Type: "zip"},
+			opts: Options{Name: "MeteorsLiu/llar", Tag: "test", Type: "zip"},
 			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
 		},
 		{
 			name: "initial seek",
 			r:    seekErrorReader{},
-			opts: Options{Name: "MeteorsLiu/llar:test"},
+			opts: Options{Name: "MeteorsLiu/llar", Tag: "test"},
 			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
 		},
 		{
 			name: "read",
 			r:    readErrorSeeker{},
-			opts: Options{Name: "MeteorsLiu/llar:test"},
+			opts: Options{Name: "MeteorsLiu/llar", Tag: "test"},
 			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
 		},
 		{
 			name: "restore seek",
 			r:    &secondSeekErrorReader{Reader: bytes.NewReader([]byte("archive"))},
-			opts: Options{Name: "MeteorsLiu/llar:test"},
+			opts: Options{Name: "MeteorsLiu/llar", Tag: "test"},
 			u:    ghcrUploader{cfg: GHCRConfig{Owner: "MeteorsLiu"}, writeIndex: (&recordingIndexWriter{}).write},
 		},
 		{
 			name: "writer",
 			r:    bytes.NewReader([]byte("archive")),
-			opts: Options{Name: "MeteorsLiu/llar:test"},
+			opts: Options{Name: "MeteorsLiu/llar", Tag: "test"},
 			u: ghcrUploader{
 				cfg: GHCRConfig{Owner: "MeteorsLiu"},
 				writeIndex: func(context.Context, string, v1.ImageIndex, string, string) error {
@@ -275,7 +277,8 @@ func TestGHCRUploaderAcceptsGitHubStyleOwnerCase(t *testing.T) {
 	}
 
 	got, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("archive")), Options{
-		Name: "MeteorsLiu/llar:test",
+		Name: "MeteorsLiu/llar",
+		Tag:  "test",
 		Type: "tar.gz",
 		Attrs: map[string]string{
 			"org.llar.matrix": "amd64-linux",
@@ -304,7 +307,8 @@ func TestGHCRUploaderPassesConfiguredUsernameToWriter(t *testing.T) {
 	}
 
 	if _, err := uploader.Upload(context.Background(), bytes.NewReader([]byte("archive")), Options{
-		Name: "MeteorsLiu/llar:test",
+		Name: "MeteorsLiu/llar",
+		Tag:  "test",
 		Type: "tar.gz",
 	}); err != nil {
 		t.Fatalf("Upload: %v", err)
@@ -321,36 +325,41 @@ func TestParseGHCRName(t *testing.T) {
 	tests := []struct {
 		name    string
 		rawName string
+		tag     string
 		owner   string
 		want    ghcrRef
 	}{
 		{
 			name:    "trims registry prefix",
-			rawName: "ghcr.io/MeteorsLiu/llar:test",
+			rawName: "ghcr.io/MeteorsLiu/llar",
+			tag:     "test",
 			owner:   "MeteorsLiu",
 			want:    ghcrRef{repo: "meteorsliu/llar", tag: "test"},
 		},
 		{
 			name:    "adds owner",
-			rawName: "llar:test",
+			rawName: "llar",
+			tag:     "test",
 			owner:   "/MeteorsLiu/",
 			want:    ghcrRef{repo: "meteorsliu/llar", tag: "test"},
 		},
 		{
 			name:    "keeps nested owner repo",
-			rawName: "MeteorsLiu/madler/zlib:v1.3.1",
+			rawName: "MeteorsLiu/madler/zlib",
+			tag:     "v1.3.1",
 			owner:   "MeteorsLiu",
 			want:    ghcrRef{repo: "meteorsliu/madler/zlib", tag: "v1.3.1"},
 		},
 		{
 			name:    "allows empty owner",
-			rawName: "madler/zlib:v1.3.1",
+			rawName: "madler/zlib",
+			tag:     "v1.3.1",
 			want:    ghcrRef{repo: "madler/zlib", tag: "v1.3.1"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseGHCRName(tt.rawName, tt.owner)
+			got, err := parseGHCRName(tt.rawName, tt.tag, tt.owner)
 			if err != nil {
 				t.Fatalf("parseGHCRName: %v", err)
 			}
@@ -364,16 +373,15 @@ func TestParseGHCRName(t *testing.T) {
 func TestParseGHCRNameRejectsInvalidNames(t *testing.T) {
 	tests := []struct {
 		rawName string
+		tag     string
 		owner   string
 	}{
-		{rawName: ""},
+		{rawName: "", tag: "test"},
 		{rawName: "MeteorsLiu/llar"},
-		{rawName: "MeteorsLiu/llar:"},
-		{rawName: ":test"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.rawName, func(t *testing.T) {
-			if _, err := parseGHCRName(tt.rawName, tt.owner); err == nil {
+			if _, err := parseGHCRName(tt.rawName, tt.tag, tt.owner); err == nil {
 				t.Fatal("parseGHCRName error = nil, want error")
 			}
 		})
