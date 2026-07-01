@@ -1,0 +1,7 @@
+id "test/jsondep"
+
+fromVer "1.2.3"
+
+onBuild (ctx, proj, out) => {
+	out.setMetadata "-ljsondep"
+}
