@@ -19,15 +19,9 @@ type Target struct {
 	Version string
 }
 
-type Matrix struct {
-	Require map[string]string `json:"require"`
-	Options map[string]string `json:"options,omitempty"`
-}
-
 type Request struct {
 	Target    Target
 	MatrixStr string
-	Matrix    Matrix
 }
 
 type TargetArtifact struct {
@@ -196,12 +190,6 @@ func uploadAttrs(uploadType string, req Request) map[string]string {
 	case "ghcr":
 		attrs := map[string]string{
 			"org.llar.matrix": req.MatrixStr,
-		}
-		if os := req.Matrix.Require["os"]; os != "" {
-			attrs["os"] = os
-		}
-		if arch := req.Matrix.Require["arch"]; arch != "" {
-			attrs["arch"] = arch
 		}
 		return attrs
 	default:

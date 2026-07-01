@@ -113,8 +113,6 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 		Type: "tar.gz",
 		Attrs: map[string]string{
 			"org.llar.matrix": "amd64-linux",
-			"os":              "linux",
-			"arch":            "amd64",
 		},
 	}
 	if !reflect.DeepEqual(opts[0], wantOptions) {
@@ -296,9 +294,6 @@ func testRequest() Request {
 	return Request{
 		Target:    Target{Module: "madler/zlib", Version: "v1.3.1"},
 		MatrixStr: "amd64-linux",
-		Matrix: Matrix{
-			Require: map[string]string{"arch": "amd64", "os": "linux"},
-		},
 	}
 }
 

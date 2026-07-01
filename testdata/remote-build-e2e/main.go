@@ -477,12 +477,6 @@ func requestForTarget(target remotebuild.Target, matrixStr string) remotebuild.R
 	return remotebuild.Request{
 		Target:    localTarget,
 		MatrixStr: matrixStr,
-		Matrix: remotebuild.Matrix{
-			Require: map[string]string{
-				"os":   runtime.GOOS,
-				"arch": runtime.GOARCH,
-			},
-		},
 	}
 }
 
@@ -558,8 +552,6 @@ func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remot
 func assertUploadAttrs(opts upload.Options, req remotebuild.Request) error {
 	want := map[string]string{
 		"org.llar.matrix": req.MatrixStr,
-		"os":              runtime.GOOS,
-		"arch":            runtime.GOARCH,
 	}
 	if !reflect.DeepEqual(opts.Attrs, want) {
 		return fmt.Errorf("upload attrs = %+v, want %+v", opts.Attrs, want)
