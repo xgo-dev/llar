@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/upload"
 )
@@ -113,6 +114,8 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 		Type: "tar.gz",
 		Attrs: map[string]string{
 			"org.llar.matrix": "amd64-linux",
+			"os":              "linux",
+			"arch":            "amd64",
 		},
 	}
 	if !reflect.DeepEqual(opts[0], wantOptions) {
@@ -251,7 +254,7 @@ func TestBuildRequiresStore(t *testing.T) {
 }
 
 func TestBuildUploadRequiresUploader(t *testing.T) {
-	_, _, _, err := (&Builds{}).upload(context.Background(), testRequest(), "madler/zlib", makeResult{
+	_, _, _, err := (&Builds{}).upload(context.Background(), testRequest(), "madler/zlib", "amd64-linux", makeResult{
 		Archive: strings.NewReader("archive"),
 		Type:    "tar.gz",
 	})
@@ -268,7 +271,7 @@ func TestBuildUploadOmitsAttrsForNonGHCRUploader(t *testing.T) {
 			Checksum: "abc",
 		},
 	}
-	_, _, _, err := (&Builds{uploader: uploader}).upload(context.Background(), testRequest(), "madler/zlib", makeResult{
+	_, _, _, err := (&Builds{uploader: uploader}).upload(context.Background(), testRequest(), "madler/zlib", "amd64-linux", makeResult{
 		Archive: strings.NewReader("archive"),
 		Type:    "tar.gz",
 	})
@@ -292,8 +295,13 @@ type buildCall struct {
 
 func testRequest() Request {
 	return Request{
-		Target:    Target{Module: "madler/zlib", Version: "v1.3.1"},
-		MatrixStr: "amd64-linux",
+		Target: Target{Module: "madler/zlib", Version: "v1.3.1"},
+		Matrix: formula.Matrix{
+			Require: map[string][]string{
+				"arch": {"amd64"},
+				"os":   {"linux"},
+			},
+		},
 	}
 }
 
@@ -301,7 +309,7 @@ func artifactKey(req Request) artifact.Key {
 	return artifact.Key{
 		Module:    req.Target.Module,
 		Version:   req.Target.Version,
-		MatrixStr: req.MatrixStr,
+		MatrixStr: req.Matrix.Combinations()[0],
 	}
 }
 

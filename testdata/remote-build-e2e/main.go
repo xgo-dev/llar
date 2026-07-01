@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -141,9 +142,18 @@ func run(cfg config) error {
 	}, cleanupTargets); err != nil {
 		return fmt.Errorf("cleanup GHCR packages: %w", err)
 	}
-	matrixStr := strings.TrimSpace(cfg.matrix)
-	if matrixStr == "" {
-		matrixStr = hostMatrixStr()
+	matrix := formula.Matrix{
+		Require: map[string][]string{
+			"os":   {runtime.GOOS},
+			"arch": {runtime.GOARCH},
+		},
+	}
+	if customMatrix := strings.TrimSpace(cfg.matrix); customMatrix != "" {
+		matrix = formula.Matrix{
+			Require: map[string][]string{
+				"matrix": {customMatrix},
+			},
+		}
 	}
 	e2e := suite{
 		cfg: configData{
@@ -152,7 +162,7 @@ func run(cfg config) error {
 			ghcrUsername:  cfg.ghcrUsername,
 			ghcrToken:     cfg.ghcrToken,
 			target:        target,
-			matrixStr:     matrixStr,
+			matrix:        matrix,
 			sharedTargets: sharedTargets,
 		},
 		store: store,
@@ -192,7 +202,7 @@ type configData struct {
 	ghcrUsername  string
 	ghcrToken     string
 	target        remotebuild.Target
-	matrixStr     string
+	matrix        formula.Matrix
 	sharedTargets []remotebuild.Target
 }
 
@@ -207,7 +217,7 @@ type suite struct {
 }
 
 func (s *suite) coldBuild(ctx context.Context) error {
-	s.baseReq = requestForTarget(s.cfg.target, s.cfg.matrixStr)
+	s.baseReq = requestForTarget(s.cfg.target, s.cfg.matrix)
 	s.baseUploader = newCountingUploader(s.cfg)
 	opts := s.buildOptions(s.baseUploader)
 	s.baseBuilds = remotebuild.New(opts)
@@ -226,7 +236,7 @@ func (s *suite) coldBuild(ctx context.Context) error {
 	if err := assertUploadAttrs(s.baseUploader.Options()[0], s.baseReq); err != nil {
 		return err
 	}
-	if err := assertStoredArtifact(ctx, s.store, s.cfg.target, s.baseReq.MatrixStr, got[0].Artifact); err != nil {
+	if err := assertStoredArtifact(ctx, s.store, s.cfg.target, s.baseReq.Matrix.Combinations()[0], got[0].Artifact); err != nil {
 		return err
 	}
 	s.base = got
@@ -265,7 +275,10 @@ func (s *suite) persistedCache(ctx context.Context) error {
 }
 
 func (s *suite) differentMatrix(ctx context.Context) error {
-	req := requestForTarget(s.cfg.target, s.cfg.matrixStr+"-variant")
+	matrix := s.cfg.matrix
+	matrix.Require = maps.Clone(matrix.Require)
+	matrix.Require["variant"] = []string{"variant"}
+	req := requestForTarget(s.cfg.target, matrix)
 	uploader := newCountingUploader(s.cfg)
 	opts := s.buildOptions(uploader)
 	builds := remotebuild.New(opts)
@@ -282,11 +295,14 @@ func (s *suite) differentMatrix(ctx context.Context) error {
 	if err := assertUploadAttrs(uploader.Options()[0], req); err != nil {
 		return err
 	}
-	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.MatrixStr, got[0].Artifact)
+	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.Matrix.Combinations()[0], got[0].Artifact)
 }
 
 func (s *suite) concurrentDuplicate(ctx context.Context) error {
-	req := requestForTarget(s.cfg.target, s.cfg.matrixStr+"-concurrent")
+	matrix := s.cfg.matrix
+	matrix.Require = maps.Clone(matrix.Require)
+	matrix.Require["variant"] = []string{"concurrent"}
+	req := requestForTarget(s.cfg.target, matrix)
 	uploader := newCountingUploader(s.cfg)
 	opts := s.buildOptions(uploader)
 	builds := remotebuild.New(opts)
@@ -325,19 +341,22 @@ func (s *suite) concurrentDuplicate(ctx context.Context) error {
 	if err := assertUploadAttrs(uploader.Options()[0], req); err != nil {
 		return err
 	}
-	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.MatrixStr, first.artifacts[0].Artifact)
+	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.Matrix.Combinations()[0], first.artifacts[0].Artifact)
 }
 
 func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
 	uploader := newCountingUploader(s.cfg)
 	opts := s.buildOptions(uploader)
 	builds := remotebuild.New(opts)
-	matrixStr := s.cfg.matrixStr + "-shareddep"
+	matrix := s.cfg.matrix
+	matrix.Require = maps.Clone(matrix.Require)
+	matrix.Require["variant"] = []string{"shareddep"}
+	matrixStr := matrix.Combinations()[0]
 
 	results := make(chan namedBuildResult, len(s.cfg.sharedTargets))
 	start := make(chan struct{})
 	for _, target := range s.cfg.sharedTargets {
-		req := requestForTarget(target, matrixStr)
+		req := requestForTarget(target, matrix)
 		go func(target remotebuild.Target, req remotebuild.Request) {
 			<-start
 			got, err := builds.Build(ctx, req, nil)
@@ -358,7 +377,7 @@ func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
 		if err := assertTargetArtifact(s.cfg, result.target, result.artifacts); err != nil {
 			return err
 		}
-		if err := assertStoredArtifact(ctx, s.store, result.target, result.req.MatrixStr, result.artifacts[0].Artifact); err != nil {
+		if err := assertStoredArtifact(ctx, s.store, result.target, result.req.Matrix.Combinations()[0], result.artifacts[0].Artifact); err != nil {
 			return err
 		}
 		gotByTarget[result.artifacts[0].Target] = result.artifacts
@@ -471,12 +490,12 @@ func isGitHubNotFound(err error) bool {
 	return ok && errResp.Response != nil && errResp.Response.StatusCode == http.StatusNotFound
 }
 
-func requestForTarget(target remotebuild.Target, matrixStr string) remotebuild.Request {
+func requestForTarget(target remotebuild.Target, matrix formula.Matrix) remotebuild.Request {
 	localTarget := target
 	localTarget.Module = localFormulaPath(target)
 	return remotebuild.Request{
-		Target:    localTarget,
-		MatrixStr: matrixStr,
+		Target: localTarget,
+		Matrix: matrix,
 	}
 }
 
@@ -551,7 +570,13 @@ func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remot
 
 func assertUploadAttrs(opts upload.Options, req remotebuild.Request) error {
 	want := map[string]string{
-		"org.llar.matrix": req.MatrixStr,
+		"org.llar.matrix": req.Matrix.Combinations()[0],
+	}
+	if values := req.Matrix.Require["os"]; len(values) > 0 && values[0] != "" {
+		want["os"] = values[0]
+	}
+	if values := req.Matrix.Require["arch"]; len(values) > 0 && values[0] != "" {
+		want["arch"] = values[0]
 	}
 	if !reflect.DeepEqual(opts.Attrs, want) {
 		return fmt.Errorf("upload attrs = %+v, want %+v", opts.Attrs, want)
@@ -575,16 +600,6 @@ func assertStoredArtifact(ctx context.Context, store artifact.Store, target remo
 		return fmt.Errorf("stored artifact = %+v, want %+v", got, want)
 	}
 	return nil
-}
-
-func hostMatrixStr() string {
-	matrix := formula.Matrix{
-		Require: map[string][]string{
-			"os":   {runtime.GOOS},
-			"arch": {runtime.GOARCH},
-		},
-	}
-	return matrix.Combinations()[0]
 }
 
 type countingUploader struct {

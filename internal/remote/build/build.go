@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/upload"
 	"github.com/goplus/llar/mod/versions"
@@ -20,8 +21,8 @@ type Target struct {
 }
 
 type Request struct {
-	Target    Target
-	MatrixStr string
+	Target Target
+	Matrix formula.Matrix
 }
 
 type TargetArtifact struct {
@@ -64,10 +65,11 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 	if err != nil {
 		return nil, err
 	}
+	matrixStr := req.Matrix.Combinations()[0]
 	key := artifact.Key{
 		Module:    modulePath,
 		Version:   req.Target.Version,
-		MatrixStr: req.MatrixStr,
+		MatrixStr: matrixStr,
 	}
 	stored, ok, err := b.store.Get(ctx, key)
 	if err != nil {
@@ -75,13 +77,13 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 	}
 	if ok {
 		return []TargetArtifact{{
-			Target:   targetString(modulePath, req.Target.Version),
+			Target:   modulePath + "@" + req.Target.Version,
 			Artifact: stored,
 		}}, nil
 	}
 
 	ch := b.flights.DoChan(flightKey(key), func() (any, error) {
-		return b.makeUploadStore(ctx, req, key, modulePath, info)
+		return b.makeUploadStore(ctx, req, key, modulePath, matrixStr, info)
 	})
 	select {
 	case result := <-ch:
@@ -94,12 +96,12 @@ func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]Targ
 	}
 }
 
-func (b *Builds) makeUploadStore(ctx context.Context, req Request, key artifact.Key, modulePath string, info io.Writer) ([]TargetArtifact, error) {
+func (b *Builds) makeUploadStore(ctx context.Context, req Request, key artifact.Key, modulePath, matrixStr string, info io.Writer) ([]TargetArtifact, error) {
 	made, err := b.make(ctx, req, info)
 	if err != nil {
 		return nil, err
 	}
-	uploaded, archiveType, uploadType, err := b.upload(ctx, req, modulePath, made)
+	uploaded, archiveType, uploadType, err := b.upload(ctx, req, modulePath, matrixStr, made)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +119,7 @@ func (b *Builds) make(ctx context.Context, req Request, info io.Writer) (makeRes
 	return made, nil
 }
 
-func (b *Builds) upload(ctx context.Context, req Request, modulePath string, made makeResult) (upload.Result, string, string, error) {
+func (b *Builds) upload(ctx context.Context, req Request, modulePath, matrixStr string, made makeResult) (upload.Result, string, string, error) {
 	if b.uploader == nil {
 		return upload.Result{}, "", "", errors.New("build uploader is required")
 	}
@@ -135,7 +137,7 @@ func (b *Builds) upload(ctx context.Context, req Request, modulePath string, mad
 	uploaded, err := b.uploader.Upload(ctx, made.Archive, upload.Options{
 		Name:  modulePath + ":" + req.Target.Version,
 		Type:  archiveType,
-		Attrs: uploadAttrs(uploadType, req),
+		Attrs: uploadAttrs(uploadType, matrixStr, req.Matrix),
 	})
 	if err != nil {
 		return upload.Result{}, "", "", fmt.Errorf("upload artifact: %w", err)
@@ -157,7 +159,7 @@ func (b *Builds) put(ctx context.Context, req Request, key artifact.Key, moduleP
 		return nil, fmt.Errorf("put artifact: %w", err)
 	}
 	return []TargetArtifact{{
-		Target:   targetString(modulePath, req.Target.Version),
+		Target:   modulePath + "@" + req.Target.Version,
 		Artifact: stored,
 	}}, nil
 }
@@ -181,15 +183,17 @@ func targetModulePath(target Target) (string, error) {
 	return path, nil
 }
 
-func targetString(module, version string) string {
-	return module + "@" + version
-}
-
-func uploadAttrs(uploadType string, req Request) map[string]string {
+func uploadAttrs(uploadType, matrixStr string, matrix formula.Matrix) map[string]string {
 	switch uploadType {
 	case "ghcr":
 		attrs := map[string]string{
-			"org.llar.matrix": req.MatrixStr,
+			"org.llar.matrix": matrixStr,
+		}
+		if values := matrix.Require["os"]; len(values) > 0 && values[0] != "" {
+			attrs["os"] = values[0]
+		}
+		if values := matrix.Require["arch"]; len(values) > 0 && values[0] != "" {
+			attrs["arch"] = values[0]
 		}
 		return attrs
 	default:
