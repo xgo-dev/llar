@@ -189,15 +189,22 @@ func TestBuildRunsMakeWithLocalTargetPath(t *testing.T) {
 }
 
 func TestBuildRejectsLocalTargetByDefault(t *testing.T) {
-	req := testRequest()
-	req.Target.Module = filepath.Join(t.TempDir(), "zlib")
+	for _, module := range []string{
+		filepath.Join(t.TempDir(), "zlib"),
+		"./zlib",
+	} {
+		t.Run(module, func(t *testing.T) {
+			req := testRequest()
+			req.Target.Module = module
 
-	_, err := New(Options{
-		Store:    newFakeStore(),
-		Uploader: &fakeUploader{},
-	}).Build(context.Background(), req, nil)
-	if err == nil || !strings.Contains(err.Error(), "local target module is not allowed") {
-		t.Fatalf("Build error = %v, want local target disabled error", err)
+			_, err := New(Options{
+				Store:    newFakeStore(),
+				Uploader: &fakeUploader{},
+			}).Build(context.Background(), req, nil)
+			if err == nil || !strings.Contains(err.Error(), "local target module is not allowed") {
+				t.Fatalf("Build error = %v, want local target disabled error", err)
+			}
+		})
 	}
 }
 

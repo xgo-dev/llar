@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	stdbuild "go/build"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/goplus/llar/formula"
@@ -24,7 +26,7 @@ type Request struct {
 	Matrix formula.Matrix
 }
 
-// AllowLocal permits absolute local target modules. It is intended for tests.
+// AllowLocal permits local target modules. It is intended for tests.
 var AllowLocal bool
 
 type TargetArtifact struct {
@@ -60,7 +62,7 @@ func New(opts Options) *Builds {
 }
 
 func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]TargetArtifact, error) {
-	if filepath.IsAbs(req.Target.Module) && !AllowLocal {
+	if isLocalTarget(req.Target.Module) && !AllowLocal {
 		return nil, fmt.Errorf("local target module is not allowed: %s", req.Target.Module)
 	}
 	if b.store == nil {
@@ -170,10 +172,19 @@ func (b *Builds) put(ctx context.Context, req Request, key artifact.Key, moduleP
 }
 
 func targetModulePath(target Target) (string, error) {
-	if !filepath.IsAbs(target.Module) {
+	module, local := localTargetPattern(target.Module)
+	if !local {
 		return target.Module, nil
 	}
-	mods, err := modlocal.Resolve(target.Module, target.Module)
+	cwd := module
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return "", err
+		}
+	}
+	mods, err := modlocal.Resolve(cwd, module)
 	if err != nil {
 		return "", fmt.Errorf("read local target module %s: %w", target.Module, err)
 	}
@@ -181,6 +192,21 @@ func targetModulePath(target Target) (string, error) {
 		return "", fmt.Errorf("local target module %s has empty path", target.Module)
 	}
 	return mods[0].Path, nil
+}
+
+func localTargetPattern(module string) (string, bool) {
+	if !isLocalTarget(module) {
+		return module, false
+	}
+	module = filepath.Clean(module)
+	if module == "." {
+		module = ""
+	}
+	return module, true
+}
+
+func isLocalTarget(module string) bool {
+	return stdbuild.IsLocalImport(module) || filepath.IsAbs(module)
 }
 
 func uploadAttrs(uploadType, matrixStr string, matrix formula.Matrix) map[string]string {

@@ -30,7 +30,14 @@ func runLLARMake(ctx context.Context, req Request, info io.Writer) (makeResult, 
 	archivePath := filepath.Join(dir, "artifact.tar.gz")
 	module := req.Target.Module
 	cmdDir := workDir
-	if filepath.IsAbs(module) {
+	if localModule, local := localTargetPattern(module); local {
+		module = localModule
+		if !filepath.IsAbs(module) {
+			module, err = filepath.Abs(module)
+			if err != nil {
+				return makeResult{}, err
+			}
+		}
 		if resolved, err := filepath.EvalSymlinks(module); err == nil {
 			module = resolved
 		}
