@@ -128,6 +128,11 @@ func TestBuildRunsMakeUploadsAndStoresArtifact(t *testing.T) {
 
 func TestBuildRunsMakeWithLocalTargetPath(t *testing.T) {
 	installLLARHelper(t)
+	oldAllowLocal := AllowLocal
+	AllowLocal = true
+	t.Cleanup(func() {
+		AllowLocal = oldAllowLocal
+	})
 
 	formulaDir := filepath.Join(t.TempDir(), "zlib")
 	if err := os.MkdirAll(filepath.Join(formulaDir, "v1.3.1"), 0o755); err != nil {
@@ -180,6 +185,19 @@ func TestBuildRunsMakeWithLocalTargetPath(t *testing.T) {
 	wantTarget := wantPattern + "@v1.3.1"
 	if target != wantTarget {
 		t.Fatalf("llar make target = %q, want %q", target, wantTarget)
+	}
+}
+
+func TestBuildRejectsLocalTargetByDefault(t *testing.T) {
+	req := testRequest()
+	req.Target.Module = filepath.Join(t.TempDir(), "zlib")
+
+	_, err := New(Options{
+		Store:    newFakeStore(),
+		Uploader: &fakeUploader{},
+	}).Build(context.Background(), req, nil)
+	if err == nil || !strings.Contains(err.Error(), "local target module is not allowed") {
+		t.Fatalf("Build error = %v, want local target disabled error", err)
 	}
 }
 

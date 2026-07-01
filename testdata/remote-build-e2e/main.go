@@ -50,6 +50,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+	remotebuild.AllowLocal = true
 	if err := run(cfg); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

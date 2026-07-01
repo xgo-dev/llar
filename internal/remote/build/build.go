@@ -24,6 +24,9 @@ type Request struct {
 	Matrix formula.Matrix
 }
 
+// AllowLocal permits absolute local target modules. It is intended for tests.
+var AllowLocal bool
+
 type TargetArtifact struct {
 	Target   string
 	Artifact artifact.Artifact
@@ -57,6 +60,9 @@ func New(opts Options) *Builds {
 }
 
 func (b *Builds) Build(ctx context.Context, req Request, info io.Writer) ([]TargetArtifact, error) {
+	if filepath.IsAbs(req.Target.Module) && !AllowLocal {
+		return nil, fmt.Errorf("local target module is not allowed: %s", req.Target.Module)
+	}
 	if b.store == nil {
 		return nil, errors.New("build store is required")
 	}
