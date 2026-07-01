@@ -29,7 +29,7 @@ func runLLARMake(ctx context.Context, req Request, info io.Writer) (makeResult, 
 
 	archivePath := filepath.Join(dir, "artifact.tar.gz")
 	target := req.Target.Module + "@" + req.Target.Version
-	cmd := exec.CommandContext(ctx, "llar", "make", "-o", archivePath, target)
+	cmd := exec.CommandContext(ctx, "llar", "make", "-v", "-o", archivePath, target)
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), "HOME="+homeDir)
 

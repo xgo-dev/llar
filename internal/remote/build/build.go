@@ -180,5 +180,5 @@ func uploadAttrs(uploadType string, req Request) map[string]string {
 }
 
 func flightKey(key artifact.Key) string {
-	return key.Module + "\x00" + key.Version + "\x00" + key.MatrixStr
+	return key.Module + key.Version + key.MatrixStr
 }
