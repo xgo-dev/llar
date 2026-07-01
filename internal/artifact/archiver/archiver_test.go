@@ -119,6 +119,71 @@ func TestPackTarGzIncludesNestedFiles(t *testing.T) {
 	}
 }
 
+func TestUnpackZipRestoresPayload(t *testing.T) {
+	src := setupSourceDir(t)
+	archive := filepath.Join(t.TempDir(), "out.zip")
+	if err := Pack(src, archive, json.RawMessage(`{"metadata":"-lfoo"}`)); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	dst := t.TempDir()
+
+	if err := Unpack(archive, dst); err != nil {
+		t.Fatalf("Unpack: %v", err)
+	}
+
+	assertFileContent(t, filepath.Join(dst, "lib", "libfoo.a"), "archive")
+	assertFileContent(t, filepath.Join(dst, ".llar", "metadata.json"), `{"metadata":"-lfoo"}`)
+}
+
+func TestUnpackTarGzRestoresPayload(t *testing.T) {
+	src := setupSourceDir(t)
+	archive := filepath.Join(t.TempDir(), "out.tar.gz")
+	if err := Pack(src, archive, json.RawMessage(`{"metadata":"-lfoo"}`)); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	dst := t.TempDir()
+
+	if err := Unpack(archive, dst); err != nil {
+		t.Fatalf("Unpack: %v", err)
+	}
+
+	assertFileContent(t, filepath.Join(dst, "include", "foo.h"), "#pragma once")
+	assertFileContent(t, filepath.Join(dst, ".llar", "metadata.json"), `{"metadata":"-lfoo"}`)
+}
+
+func TestUnpackRejectsPathTraversal(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "bad.tar.gz")
+	file, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(file)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "../escape", Mode: 0o644, Size: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Unpack(archive, t.TempDir())
+	if err == nil {
+		t.Fatal("Unpack error = nil, want path traversal error")
+	}
+	if !strings.Contains(err.Error(), "invalid artifact path") {
+		t.Fatalf("Unpack error = %v, want invalid artifact path", err)
+	}
+}
+
 func TestPackReturnsCreateError(t *testing.T) {
 	src := setupSourceDir(t)
 	dst := filepath.Join(t.TempDir(), "missing", "out.zip")

@@ -29,6 +29,16 @@ func Pack(srcDir, dst string, metainfo json.RawMessage) error {
 	return fmt.Errorf("unsupported artifact output %q: use .zip or .tar.gz", dst)
 }
 
+func Unpack(src, dstDir string) error {
+	if strings.HasSuffix(src, ".zip") {
+		return unpackZip(src, dstDir)
+	}
+	if strings.HasSuffix(src, ".tar.gz") {
+		return unpackTarGz(src, dstDir)
+	}
+	return fmt.Errorf("unsupported artifact input %q: use .zip or .tar.gz", src)
+}
+
 func writeZipArtifact(srcDir, dst string, metainfo json.RawMessage) error {
 	f, err := os.Create(dst)
 	if err != nil {
@@ -43,6 +53,43 @@ func writeZipArtifact(srcDir, dst string, metainfo json.RawMessage) error {
 		return err
 	}
 	return writeZipMetadata(w, metainfo)
+}
+
+func unpackZip(src, dstDir string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return err
+	}
+	for _, file := range r.File {
+		target, err := unpackPath(dstDir, file.Name)
+		if err != nil {
+			return err
+		}
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, file.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		rc, err := file.Open()
+		if err != nil {
+			return err
+		}
+		err = writeUnpackedFile(target, file.Mode(), rc)
+		_ = rc.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func packZip(w *zip.Writer, srcDir string) error {
@@ -118,6 +165,80 @@ func writeTarGzArtifact(srcDir, dst string, metainfo json.RawMessage) error {
 		return err
 	}
 	return writeTarMetadata(tw, metainfo)
+}
+
+func unpackTarGz(src, dstDir string) error {
+	file, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return err
+	}
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		target, err := unpackPath(dstDir, header.Name)
+		if err != nil {
+			return err
+		}
+		info := header.FileInfo()
+		if info.IsDir() {
+			if err := os.MkdirAll(target, info.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := writeUnpackedFile(target, info.Mode(), tr); err != nil {
+			return err
+		}
+	}
+}
+
+func unpackPath(dstDir, name string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(name))
+	if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) || clean == ".." {
+		return "", fmt.Errorf("invalid artifact path %q", name)
+	}
+	target := filepath.Join(dstDir, clean)
+	rel, err := filepath.Rel(dstDir, target)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("artifact path %q escapes output directory", name)
+	}
+	return target, nil
+}
+
+func writeUnpackedFile(path string, mode os.FileMode, r io.Reader) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = io.Copy(file, r)
+	return err
 }
 
 func packTar(tw *tar.Writer, srcDir string) error {

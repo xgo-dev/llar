@@ -1,0 +1,71 @@
+name: Build Cache E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+      - "!dependabot/**"
+      - "!xgopilot/**"
+  pull_request_target:
+    branches: ["**"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-cache-e2e:
+    name: internal/build -> GHCR -> Postgres
+    runs-on: ubuntu-latest
+    environment: ghcr-e2e
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: llar
+          POSTGRES_PASSWORD: llar
+          POSTGRES_DB: llar_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U llar -d llar_e2e"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.x
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Download E2E Go modules
+        working-directory: testdata/remote-build-e2e
+        run: go mod download
+
+      - name: Run build cache E2E
+        working-directory: testdata/remote-build-e2e
+        env:
+          GHCR_OWNER: ${{ secrets.GHCR_OWNER }}
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: >-
+          go run .
+          --ghcr-owner "$GHCR_OWNER"
+          --ghcr-username "$GHCR_USERNAME"
+          --ghcr-token "$GHCR_TOKEN"
