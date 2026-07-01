@@ -6,12 +6,11 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact"
+	"github.com/goplus/llar/internal/modules/modlocal"
 	"github.com/goplus/llar/internal/upload"
-	"github.com/goplus/llar/mod/versions"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -168,19 +167,14 @@ func targetModulePath(target Target) (string, error) {
 	if !filepath.IsAbs(target.Module) {
 		return target.Module, nil
 	}
-	moduleDir := target.Module
-	if resolved, err := filepath.EvalSymlinks(moduleDir); err == nil {
-		moduleDir = resolved
-	}
-	v, err := versions.Parse(filepath.Join(moduleDir, "versions.json"), nil)
+	mods, err := modlocal.Resolve(target.Module, target.Module)
 	if err != nil {
 		return "", fmt.Errorf("read local target module %s: %w", target.Module, err)
 	}
-	path := strings.TrimSpace(v.Path)
-	if path == "" {
+	if len(mods) != 1 || mods[0].Path == "" {
 		return "", fmt.Errorf("local target module %s has empty path", target.Module)
 	}
-	return path, nil
+	return mods[0].Path, nil
 }
 
 func uploadAttrs(uploadType, matrixStr string, matrix formula.Matrix) map[string]string {
