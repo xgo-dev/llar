@@ -18,6 +18,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/name"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/google/go-github/v68/github"
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact"
@@ -193,6 +198,9 @@ func run(cfg config) error {
 	if count := artifactCount(ctx, db); count != wantArtifacts {
 		return fmt.Errorf("artifact count after E2E cases = %d, want %d", count, wantArtifacts)
 	}
+	if err := assertStoredArtifactSources(ctx, db, e2e.cfg); err != nil {
+		return err
+	}
 	log.Printf("PASS remote build E2E (%d artifacts)", wantArtifacts)
 	return nil
 }
@@ -234,7 +242,10 @@ func (s *suite) coldBuild(ctx context.Context) error {
 	if err := assertTargetArtifact(s.cfg, s.cfg.target, got); err != nil {
 		return err
 	}
-	if err := assertUploadAttrs(s.baseUploader.Options()[0], s.baseReq); err != nil {
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, s.baseReq.Matrix, got[0].Artifact); err != nil {
+		return err
+	}
+	if err := assertUploadOptions(s.baseUploader.Options()[0], s.cfg.target, s.baseReq); err != nil {
 		return err
 	}
 	if err := assertStoredArtifact(ctx, s.store, s.cfg.target, s.baseReq.Matrix.Combinations()[0], got[0].Artifact); err != nil {
@@ -252,6 +263,9 @@ func (s *suite) repeatedBuild(ctx context.Context) error {
 	if !reflect.DeepEqual(got, s.base) {
 		return fmt.Errorf("Build = %+v, want %+v", got, s.base)
 	}
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, s.baseReq.Matrix, got[0].Artifact); err != nil {
+		return err
+	}
 	if s.baseUploader.Calls() != 1 {
 		return fmt.Errorf("uploader calls after cache hit = %d, want 1", s.baseUploader.Calls())
 	}
@@ -268,6 +282,9 @@ func (s *suite) persistedCache(ctx context.Context) error {
 	}
 	if !reflect.DeepEqual(got, s.base) {
 		return fmt.Errorf("Build = %+v, want %+v", got, s.base)
+	}
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, s.baseReq.Matrix, got[0].Artifact); err != nil {
+		return err
 	}
 	if uploader.Calls() != 0 {
 		return fmt.Errorf("uploader calls = %d, want 0", uploader.Calls())
@@ -293,7 +310,10 @@ func (s *suite) differentMatrix(ctx context.Context) error {
 	if err := assertTargetArtifact(s.cfg, s.cfg.target, got); err != nil {
 		return err
 	}
-	if err := assertUploadAttrs(uploader.Options()[0], req); err != nil {
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, req.Matrix, got[0].Artifact); err != nil {
+		return err
+	}
+	if err := assertUploadOptions(uploader.Options()[0], s.cfg.target, req); err != nil {
 		return err
 	}
 	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.Matrix.Combinations()[0], got[0].Artifact)
@@ -339,7 +359,13 @@ func (s *suite) concurrentDuplicate(ctx context.Context) error {
 	if uploader.Calls() != 1 {
 		return fmt.Errorf("uploader calls = %d, want 1", uploader.Calls())
 	}
-	if err := assertUploadAttrs(uploader.Options()[0], req); err != nil {
+	if err := assertTargetArtifact(s.cfg, s.cfg.target, first.artifacts); err != nil {
+		return err
+	}
+	if err := assertGHCRArtifact(ctx, s.cfg, s.cfg.target, req.Matrix, first.artifacts[0].Artifact); err != nil {
+		return err
+	}
+	if err := assertUploadOptions(uploader.Options()[0], s.cfg.target, req); err != nil {
 		return err
 	}
 	return assertStoredArtifact(ctx, s.store, s.cfg.target, req.Matrix.Combinations()[0], first.artifacts[0].Artifact)
@@ -376,6 +402,9 @@ func (s *suite) concurrentDifferentTargets(ctx context.Context) error {
 			return fmt.Errorf("Build %s@%s: %w", result.target.Module, result.target.Version, result.err)
 		}
 		if err := assertTargetArtifact(s.cfg, result.target, result.artifacts); err != nil {
+			return err
+		}
+		if err := assertGHCRArtifact(ctx, s.cfg, result.target, result.req.Matrix, result.artifacts[0].Artifact); err != nil {
 			return err
 		}
 		if err := assertStoredArtifact(ctx, s.store, result.target, result.req.Matrix.Combinations()[0], result.artifacts[0].Artifact); err != nil {
@@ -557,6 +586,10 @@ func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remot
 	if !strings.HasPrefix(artifact.Artifact.Source.URL, wantURLPrefix) {
 		return fmt.Errorf("source url = %q, want prefix %q", artifact.Artifact.Source.URL, wantURLPrefix)
 	}
+	digest, err := sourceDigest(artifact.Artifact.Source.URL)
+	if err != nil {
+		return err
+	}
 	if artifact.Artifact.Type != "tar.gz" {
 		return fmt.Errorf("archive type = %q, want tar.gz", artifact.Artifact.Type)
 	}
@@ -566,10 +599,19 @@ func assertTargetArtifact(cfg configData, target remotebuild.Target, got []remot
 	if artifact.Artifact.Checksum == "" {
 		return fmt.Errorf("checksum is empty")
 	}
+	if artifact.Artifact.Checksum != digest {
+		return fmt.Errorf("checksum = %q, want source digest %q", artifact.Artifact.Checksum, digest)
+	}
 	return nil
 }
 
-func assertUploadAttrs(opts upload.Options, req remotebuild.Request) error {
+func assertUploadOptions(opts upload.Options, target remotebuild.Target, req remotebuild.Request) error {
+	if opts.Name != target.Module {
+		return fmt.Errorf("upload name = %q, want %q", opts.Name, target.Module)
+	}
+	if opts.Tag != target.Version {
+		return fmt.Errorf("upload tag = %q, want %q", opts.Tag, target.Version)
+	}
 	want := map[string]string{
 		"org.llar.matrix": req.Matrix.Combinations()[0],
 	}
@@ -583,6 +625,221 @@ func assertUploadAttrs(opts upload.Options, req remotebuild.Request) error {
 		return fmt.Errorf("upload attrs = %+v, want %+v", opts.Attrs, want)
 	}
 	return nil
+}
+
+func assertGHCRArtifact(ctx context.Context, cfg configData, target remotebuild.Target, matrix formula.Matrix, got artifact.Artifact) error {
+	size, err := assertGHCRBlob(ctx, cfg, got.Source.URL, got.Checksum)
+	if err != nil {
+		return err
+	}
+	if err := assertGHCRTag(ctx, cfg, target, matrix, got, size); err != nil {
+		return err
+	}
+	return nil
+}
+
+func assertGHCRTag(ctx context.Context, cfg configData, target remotebuild.Target, matrix formula.Matrix, got artifact.Artifact, blobSize int64) error {
+	ref, err := name.NewTag(ghcrTag(cfg, target), name.WeakValidation)
+	if err != nil {
+		return fmt.Errorf("GHCR tag ref: %w", err)
+	}
+	index, err := remote.Index(ref, ghcrRemoteOptions(ctx, cfg)...)
+	if err != nil {
+		return fmt.Errorf("read GHCR index %s: %w", ref.String(), err)
+	}
+	mediaType, err := index.MediaType()
+	if err != nil {
+		return fmt.Errorf("GHCR index media type: %w", err)
+	}
+	if mediaType != types.OCIImageIndex {
+		return fmt.Errorf("GHCR index media type = %q, want %q", mediaType, types.OCIImageIndex)
+	}
+	indexManifest, err := index.IndexManifest()
+	if err != nil {
+		return fmt.Errorf("GHCR index manifest: %w", err)
+	}
+	if indexManifest.MediaType != types.OCIImageIndex {
+		return fmt.Errorf("GHCR index manifest media type = %q, want %q", indexManifest.MediaType, types.OCIImageIndex)
+	}
+	if len(indexManifest.Manifests) != 1 {
+		return fmt.Errorf("GHCR index manifest count = %d, want 1", len(indexManifest.Manifests))
+	}
+	entry := indexManifest.Manifests[0]
+	matrixStr := matrix.Combinations()[0]
+	if entry.Annotations["org.llar.matrix"] != matrixStr {
+		return fmt.Errorf("GHCR matrix annotation = %q, want %q", entry.Annotations["org.llar.matrix"], matrixStr)
+	}
+	if err := assertGHCRPlatform(entry.Platform, matrix); err != nil {
+		return err
+	}
+
+	image, err := index.Image(entry.Digest)
+	if err != nil {
+		return fmt.Errorf("read GHCR image %s: %w", entry.Digest.String(), err)
+	}
+	manifest, err := image.Manifest()
+	if err != nil {
+		return fmt.Errorf("GHCR image manifest: %w", err)
+	}
+	if manifest.MediaType != types.OCIManifestSchema1 {
+		return fmt.Errorf("GHCR image manifest media type = %q, want %q", manifest.MediaType, types.OCIManifestSchema1)
+	}
+	if len(manifest.Layers) != 1 {
+		return fmt.Errorf("GHCR image layer count = %d, want 1", len(manifest.Layers))
+	}
+	layer := manifest.Layers[0]
+	wantLayerType, err := layerMediaType(got.Type)
+	if err != nil {
+		return err
+	}
+	if layer.MediaType != wantLayerType {
+		return fmt.Errorf("GHCR layer media type = %q, want %q", layer.MediaType, wantLayerType)
+	}
+	if layer.Digest.Algorithm != "sha256" || layer.Digest.Hex != got.Checksum {
+		return fmt.Errorf("GHCR layer digest = %s, want sha256:%s", layer.Digest.String(), got.Checksum)
+	}
+	if layer.Size != blobSize {
+		return fmt.Errorf("GHCR layer size = %d, want blob size %d", layer.Size, blobSize)
+	}
+	return nil
+}
+
+func assertGHCRPlatform(platform *v1.Platform, matrix formula.Matrix) error {
+	wantOS := firstMatrixValue(matrix, "os")
+	wantArch := firstMatrixValue(matrix, "arch")
+	if wantOS == "" && wantArch == "" {
+		if platform != nil && (platform.OS != "" || platform.Architecture != "") {
+			return fmt.Errorf("GHCR platform = %+v, want empty", platform)
+		}
+		return nil
+	}
+	if platform == nil {
+		return fmt.Errorf("GHCR platform is nil, want os=%q arch=%q", wantOS, wantArch)
+	}
+	if platform.OS != wantOS {
+		return fmt.Errorf("GHCR platform os = %q, want %q", platform.OS, wantOS)
+	}
+	if platform.Architecture != wantArch {
+		return fmt.Errorf("GHCR platform arch = %q, want %q", platform.Architecture, wantArch)
+	}
+	return nil
+}
+
+func assertGHCRBlob(ctx context.Context, cfg configData, sourceURL, checksum string) (int64, error) {
+	digest, err := sourceDigest(sourceURL)
+	if err != nil {
+		return 0, err
+	}
+	if checksum != digest {
+		return 0, fmt.Errorf("checksum = %q, want source digest %q", checksum, digest)
+	}
+	repo, err := sourceRepo(sourceURL)
+	if err != nil {
+		return 0, err
+	}
+	ref, err := name.NewDigest("ghcr.io/"+repo+"@sha256:"+digest, name.WeakValidation)
+	if err != nil {
+		return 0, fmt.Errorf("GHCR blob ref: %w", err)
+	}
+	layer, err := remote.Layer(ref, ghcrRemoteOptions(ctx, cfg)...)
+	if err != nil {
+		return 0, fmt.Errorf("read GHCR blob %s: %w", ref.String(), err)
+	}
+	r, err := layer.Compressed()
+	if err != nil {
+		return 0, fmt.Errorf("open GHCR blob %s: %w", ref.String(), err)
+	}
+	defer r.Close()
+	hash, size, err := v1.SHA256(r)
+	if err != nil {
+		return 0, fmt.Errorf("hash GHCR blob %s: %w", ref.String(), err)
+	}
+	if hash.Hex != checksum {
+		return 0, fmt.Errorf("GHCR blob checksum = %s, want %s", hash.Hex, checksum)
+	}
+	if size <= 0 {
+		return 0, fmt.Errorf("GHCR blob size = %d, want positive", size)
+	}
+	return size, nil
+}
+
+type storedArtifactRow struct {
+	SourceType string
+	SourceURL  string
+	Checksum   string
+}
+
+func assertStoredArtifactSources(ctx context.Context, db *gorm.DB, cfg configData) error {
+	var rows []storedArtifactRow
+	if err := db.WithContext(ctx).Table("artifacts").Select("source_type, source_url, checksum").Find(&rows).Error; err != nil {
+		return fmt.Errorf("list stored artifacts: %w", err)
+	}
+	for _, row := range rows {
+		if row.SourceType != "ghcr" {
+			return fmt.Errorf("stored source type = %q, want ghcr", row.SourceType)
+		}
+		if _, err := assertGHCRBlob(ctx, cfg, row.SourceURL, row.Checksum); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ghcrRemoteOptions(ctx context.Context, cfg configData) []remote.Option {
+	return []remote.Option{
+		remote.WithContext(ctx),
+		remote.WithAuth(authn.FromConfig(authn.AuthConfig{
+			Username: cfg.ghcrUsername,
+			Password: cfg.ghcrToken,
+		})),
+	}
+}
+
+func ghcrTag(cfg configData, target remotebuild.Target) string {
+	return "ghcr.io/" + strings.ToLower(strings.Trim(cfg.ghcrOwner, "/")+"/"+strings.Trim(target.Module, "/")) + ":" + target.Version
+}
+
+func sourceDigest(sourceURL string) (string, error) {
+	const marker = "/blobs/sha256:"
+	_, digest, ok := strings.Cut(sourceURL, marker)
+	if !ok || digest == "" {
+		return "", fmt.Errorf("source url = %q, want sha256 blob URL", sourceURL)
+	}
+	if _, err := v1.NewHash("sha256:" + digest); err != nil {
+		return "", fmt.Errorf("source digest %q: %w", digest, err)
+	}
+	return digest, nil
+}
+
+func sourceRepo(sourceURL string) (string, error) {
+	const prefix = "https://ghcr.io/v2/"
+	if !strings.HasPrefix(sourceURL, prefix) {
+		return "", fmt.Errorf("source url = %q, want GHCR URL", sourceURL)
+	}
+	repo, _, ok := strings.Cut(strings.TrimPrefix(sourceURL, prefix), "/blobs/sha256:")
+	if !ok || repo == "" {
+		return "", fmt.Errorf("source url = %q, want GHCR blob URL", sourceURL)
+	}
+	return repo, nil
+}
+
+func firstMatrixValue(matrix formula.Matrix, name string) string {
+	values := matrix.Require[name]
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
+
+func layerMediaType(archiveType string) (types.MediaType, error) {
+	switch archiveType {
+	case "tar.gz":
+		return types.OCILayer, nil
+	case "tar.zst":
+		return types.OCILayerZStd, nil
+	default:
+		return "", fmt.Errorf("unsupported archive type %q", archiveType)
+	}
 }
 
 func assertStoredArtifact(ctx context.Context, store artifact.Store, target remotebuild.Target, matrixStr string, want artifact.Artifact) error {
@@ -629,7 +886,29 @@ func (u *countingUploader) Upload(ctx context.Context, r io.ReadSeeker, opts upl
 	u.calls++
 	u.options = append(u.options, opts)
 	u.mu.Unlock()
-	return u.inner.Upload(ctx, r, opts)
+
+	offset, err := r.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return upload.Result{}, err
+	}
+	hash, size, err := v1.SHA256(r)
+	if err != nil {
+		return upload.Result{}, err
+	}
+	if _, err := r.Seek(offset, io.SeekStart); err != nil {
+		return upload.Result{}, err
+	}
+	result, err := u.inner.Upload(ctx, r, opts)
+	if err != nil {
+		return upload.Result{}, err
+	}
+	if result.Checksum != hash.Hex {
+		return upload.Result{}, fmt.Errorf("upload checksum = %q, want archive checksum %q", result.Checksum, hash.Hex)
+	}
+	if result.Size != size {
+		return upload.Result{}, fmt.Errorf("upload size = %d, want archive size %d", result.Size, size)
+	}
+	return result, nil
 }
 
 func (u *countingUploader) Calls() int {
