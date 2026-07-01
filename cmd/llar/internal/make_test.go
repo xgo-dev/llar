@@ -338,8 +338,17 @@ func runMakeCmdStreams(t *testing.T, args ...string) (string, string, error) {
 	defer os.Chdir(origDir)
 
 	// Reset flags to defaults before each run
+	origMakeVerbose := makeVerbose
+	origMakeOutput := makeOutput
+	origMakeJSON := makeJSON
 	makeVerbose = true
 	makeOutput = ""
+	makeJSON = false
+	defer func() {
+		makeVerbose = origMakeVerbose
+		makeOutput = origMakeOutput
+		makeJSON = origMakeJSON
+	}()
 
 	// Set os.Args to match what Cobra will see, so resolveMatrixStr works.
 	origArgs := os.Args
@@ -757,6 +766,53 @@ func TestMakeLocal_BuildSuccess(t *testing.T) {
 	}
 }
 
+func TestMakeLocal_JSONOutput(t *testing.T) {
+	formulaDir := setupLocalFormulas(t)
+	withMockRemoteStore(t, repo.New(formulaDir, &noopVCSRepo{}))
+
+	origDir, _ := os.Getwd()
+	os.Chdir(filepath.Join(formulaDir, "test", "jsonroot"))
+	defer os.Chdir(origDir)
+
+	workspaceDir := isolatedWorkspaceDir(t)
+	matrixStr := computeMatrixStr()
+	prepopulateCache(t, workspaceDir, "test/jsondep", "1.2.3", matrixStr, "-ljsondep")
+	prepopulateCache(t, workspaceDir, "test/jsonroot", "1.0.0", matrixStr, "-ljsonroot")
+
+	out, err := runMakeCmd(t, "--json", "./@1.0.0")
+	if err != nil {
+		t.Fatalf("llar make --json failed: %v", err)
+	}
+
+	var got struct {
+		Path    string `json:"path"`
+		Version string `json:"version"`
+		Deps    []struct {
+			Path    string `json:"path"`
+			Version string `json:"version"`
+		} `json:"deps"`
+		Metadata string `json:"metadata"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("stdout is not JSON: %v\nstdout:\n%s", err, out)
+	}
+	if got.Path != "test/jsonroot" {
+		t.Fatalf("path = %q, want %q", got.Path, "test/jsonroot")
+	}
+	if got.Version != "1.0.0" {
+		t.Fatalf("version = %q, want %q", got.Version, "1.0.0")
+	}
+	if got.Metadata != "-ljsonroot" {
+		t.Fatalf("metadata = %q, want %q", got.Metadata, "-ljsonroot")
+	}
+	if len(got.Deps) != 1 {
+		t.Fatalf("deps len = %d, want 1", len(got.Deps))
+	}
+	if got.Deps[0].Path != "test/jsondep" || got.Deps[0].Version != "1.2.3" {
+		t.Fatalf("deps[0] = %+v, want test/jsondep@1.2.3", got.Deps[0])
+	}
+}
+
 func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	formulaDir := setupLocalFormulas(t)
 	store := repo.New(formulaDir, &noopVCSRepo{})
@@ -809,9 +865,14 @@ func TestBuildModule_SilentSuccess(t *testing.T) {
 
 	// Silent mode: buildModule redirects os.Stdout to /dev/null,
 	// then restores before printing metadata
+	savedJSON := makeJSON
 	makeVerbose = false
 	makeOutput = ""
-	defer func() { makeVerbose = true }()
+	makeJSON = false
+	defer func() {
+		makeVerbose = true
+		makeJSON = savedJSON
+	}()
 
 	// Capture stdout to verify metadata output
 	origDir, _ := os.Getwd()

@@ -28,6 +28,9 @@ llar make madler/zlib@v1.3.1
 # Build with verbose output
 llar make -v madler/zlib@v1.3.1
 
+# Print the build result as JSON
+llar make --json madler/zlib@v1.3.1
+
 # Build and export to a directory
 llar make -o ./output madler/zlib@v1.3.1
 
@@ -50,6 +53,7 @@ llar make ./madler/zlib@v1.3.1
 | Flag | Description |
 |------|-------------|
 | `-v, --verbose` | Enable verbose build output |
+| `-j, --json` | Print the build result as JSON |
 | `-o, --output <path>` | Output path (directory or `.zip` file) |
 
 ## How It Works

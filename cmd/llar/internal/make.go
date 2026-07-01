@@ -24,10 +24,23 @@ import (
 
 var makeVerbose bool
 var makeOutput string
+var makeJSON bool
 
 type artifactMetadata struct {
 	Metadata string   `json:"metadata"`
 	Deps     []string `json:"deps,omitempty"`
+}
+
+type makeJSONDep struct {
+	Path    string `json:"path"`
+	Version string `json:"version"`
+}
+
+type makeJSONResult struct {
+	Path     string        `json:"path"`
+	Version  string        `json:"version"`
+	Deps     []makeJSONDep `json:"deps,omitempty"`
+	Metadata string        `json:"metadata"`
 }
 
 // newRemoteStore creates the remote formula store. Overridable for testing.
@@ -55,6 +68,7 @@ var makeCmd = &cobra.Command{
 func init() {
 	makeCmd.Flags().BoolVarP(&makeVerbose, "verbose", "v", false, "Enable verbose build output")
 	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output archive path (.zip file or .tar.gz file)")
+	makeCmd.Flags().BoolVarP(&makeJSON, "json", "j", false, "Print build result as JSON")
 	rootCmd.AddCommand(makeCmd)
 }
 
@@ -188,7 +202,22 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 
 	if len(results) > 0 {
 		main := results[len(results)-1]
-		if main.Metadata != "" {
+		if makeJSON {
+			deps := artifactDeps(mods)
+			jsonDeps := make([]makeJSONDep, 0, len(deps))
+			for _, dep := range deps {
+				jsonDeps = append(jsonDeps, makeJSONDep{Path: dep.Path, Version: dep.Version})
+			}
+			out := makeJSONResult{
+				Path:     mods[0].Path,
+				Version:  mods[0].Version,
+				Deps:     jsonDeps,
+				Metadata: main.Metadata,
+			}
+			if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+				return err
+			}
+		} else if main.Metadata != "" {
 			fmt.Println(main.Metadata)
 		}
 		if makeOutput != "" {

@@ -1,0 +1,8 @@
+{
+	"path": "test/jsonroot",
+	"deps": {
+		"1.0.0": [
+			{"path": "test/jsondep", "version": "1.2.3"}
+		]
+	}
+}
