@@ -25,8 +25,15 @@ func TestGHCRUploadIntegrationMeteorsLiuLlar(t *testing.T) {
 	if token == "" {
 		t.Skip("set GHCR_TOKEN, GITHUB_TOKEN, or CR_PAT to run live GHCR upload")
 	}
+	username := os.Getenv("GHCR_USERNAME")
+	if username == "" {
+		username = os.Getenv("GITHUB_ACTOR")
+	}
+	if username == "" {
+		t.Skip("set GHCR_USERNAME or GITHUB_ACTOR to run live GHCR upload")
+	}
 
-	uploader := NewGHCR(GHCRConfig{Owner: "MeteorsLiu", Token: token})
+	uploader := NewGHCR(GHCRConfig{Owner: "MeteorsLiu", Username: username, Token: token})
 	artifactPath := buildZlibArtifact(t)
 	artifact, err := os.Open(artifactPath)
 	if err != nil {
