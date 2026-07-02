@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/google/go-containerregistry v0.20.7
+	github.com/google/go-github/v68 v68.0.0
 	github.com/goplus/ixgo v0.61.0
 	github.com/goplus/mod v0.19.0
 	github.com/goplus/xgo v1.6.1
@@ -22,6 +23,7 @@ require (
 	github.com/docker/cli v29.0.3+incompatible // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
+	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/gopherjs/gopherjs v0.0.0-20200217142428-fce0ec30dd00 // indirect
 	github.com/goplus/gogen v1.20.6 // indirect
 	github.com/goplus/reflectx v1.5.0 // indirect

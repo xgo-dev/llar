@@ -22,7 +22,3 @@ type Uploader interface {
 	Type() string
 	Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error)
 }
-
-type PackageSeeder interface {
-	Seed(ctx context.Context, opts Options) error
-}

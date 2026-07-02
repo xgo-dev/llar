@@ -97,51 +97,6 @@ func TestArtifactCachePutUploadsAndStoresArtifact(t *testing.T) {
 	}
 }
 
-func TestArtifactCachePutSeedsPackageBeforeUploading(t *testing.T) {
-	outputDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outputDir, "libfoo.a"), []byte("archive"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	events := []string{}
-	store := &fakeArtifactStore{}
-	uploader := &fakeSeedingUploader{
-		fakeArtifactUploader: fakeArtifactUploader{
-			result: artifactuploader.Result{
-				URL:      "https://ghcr.io/v2/meteorsliu/test/lib/blobs/sha256:abc",
-				Checksum: "abc",
-			},
-			events: &events,
-		},
-	}
-	cache := NewArtifactCache(ArtifactCacheOptions{
-		Store:    store,
-		Uploader: uploader,
-	})
-	key := CacheKey{
-		Module: module.Version{Path: "test/lib", Version: "1.0.0"},
-		Matrix: "amd64-linux",
-	}
-
-	if _, err := cache.Put(context.Background(), key, outputDir, CacheEntry{Metadata: "-lfoo"}); err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-	wantEvents := []string{"seed", "upload"}
-	if !reflect.DeepEqual(events, wantEvents) {
-		t.Fatalf("events = %+v, want %+v", events, wantEvents)
-	}
-	wantOptions := artifactuploader.Options{
-		Name: "test/lib",
-		Tag:  "1.0.0",
-		Type: "tar.gz",
-		Attrs: map[string]string{
-			"org.llar.matrix": "amd64-linux",
-		},
-	}
-	if !reflect.DeepEqual(uploader.seedOptions, wantOptions) {
-		t.Fatalf("seed options = %+v, want %+v", uploader.seedOptions, wantOptions)
-	}
-}
-
 func TestArtifactCachePutReturnsCanonicalArtifactFromStore(t *testing.T) {
 	outputDir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(outputDir, "libfoo.a"), []byte("archive"), 0o644); err != nil {
@@ -345,7 +300,6 @@ type fakeArtifactUploader struct {
 	result  artifactuploader.Result
 	options artifactuploader.Options
 	payload []byte
-	events  *[]string
 }
 
 func (u *fakeArtifactUploader) Type() string {
@@ -356,9 +310,6 @@ func (u *fakeArtifactUploader) Type() string {
 }
 
 func (u *fakeArtifactUploader) Upload(ctx context.Context, r io.ReadSeeker, opts artifactuploader.Options) (artifactuploader.Result, error) {
-	if u.events != nil {
-		*u.events = append(*u.events, "upload")
-	}
 	payload, err := io.ReadAll(r)
 	if err != nil {
 		return artifactuploader.Result{}, err
@@ -366,19 +317,6 @@ func (u *fakeArtifactUploader) Upload(ctx context.Context, r io.ReadSeeker, opts
 	u.options = opts
 	u.payload = payload
 	return u.result, nil
-}
-
-type fakeSeedingUploader struct {
-	fakeArtifactUploader
-	seedOptions artifactuploader.Options
-}
-
-func (u *fakeSeedingUploader) Seed(ctx context.Context, opts artifactuploader.Options) error {
-	if u.events != nil {
-		*u.events = append(*u.events, "seed")
-	}
-	u.seedOptions = opts
-	return nil
 }
 
 type fakeArtifactDownloader struct {

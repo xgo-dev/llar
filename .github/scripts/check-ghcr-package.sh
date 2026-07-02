@@ -44,5 +44,5 @@ if [ "$user_package" = "found" ] || [ "$org_package" = "found" ]; then
   echo "Package ${GITHUB_REPOSITORY_OWNER}/${package} already exists; skipping publish."
 else
   echo "exists=false" >> "$GITHUB_OUTPUT"
-  echo "Package ${GITHUB_REPOSITORY_OWNER}/${package} does not exist; publishing seed image."
+  echo "Package ${GITHUB_REPOSITORY_OWNER}/${package} does not exist; publishing placeholder image."
 fi

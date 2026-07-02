@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -55,31 +54,12 @@ func TestCountingUploaderRejectsArchiveChecksumMismatch(t *testing.T) {
 	}
 }
 
-func TestCountingUploaderForwardsSeed(t *testing.T) {
-	inner := &fakeUploader{}
-	uploader := &countingUploader{inner: inner}
-	opts := artifactuploader.Options{Name: "madler/zlib", Tag: "v1.3.1"}
-
-	if err := uploader.Seed(context.Background(), opts); err != nil {
-		t.Fatalf("Seed: %v", err)
-	}
-	if !reflect.DeepEqual(inner.seedOptions, opts) {
-		t.Fatalf("seed options = %+v, want %+v", inner.seedOptions, opts)
-	}
-}
-
 type fakeUploader struct {
-	result      artifactuploader.Result
-	seedOptions artifactuploader.Options
+	result artifactuploader.Result
 }
 
 func (u fakeUploader) Type() string {
 	return "ghcr"
-}
-
-func (u *fakeUploader) Seed(ctx context.Context, opts artifactuploader.Options) error {
-	u.seedOptions = opts
-	return nil
 }
 
 func (u fakeUploader) Upload(context.Context, io.ReadSeeker, artifactuploader.Options) (artifactuploader.Result, error) {

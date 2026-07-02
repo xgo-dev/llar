@@ -55,9 +55,7 @@ func main() {
 	flag.StringVar(&cfg.ghcrOwner, "ghcr-owner", "", "GHCR owner")
 	flag.StringVar(&cfg.ghcrUsername, "ghcr-username", "", "GHCR username")
 	flag.StringVar(&cfg.ghcrToken, "ghcr-token", "", "GHCR token")
-	flag.StringVar(&cfg.ghcrSeedRepository, "ghcr-seed-repository", "", "GitHub owner/repo containing the GHCR seed workflow")
-	flag.StringVar(&cfg.ghcrSeedWorkflow, "ghcr-seed-workflow", "ghcr-package-seed.yml", "GHCR seed workflow file")
-	flag.StringVar(&cfg.ghcrSeedRef, "ghcr-seed-ref", "", "Git ref for the GHCR seed workflow")
+	flag.StringVar(&cfg.ghcrSourceURL, "ghcr-source-url", "", "GitHub repository URL for GHCR package creation and OCI source annotation")
 	flag.StringVar(&cfg.target, "target", defaultTarget, "target module@version")
 	flag.StringVar(&cfg.sharedTargets, "shared-targets", defaultSharedTargets, "comma-separated module@version targets sharing a dependency")
 	flag.StringVar(&cfg.matrix, "matrix", "", "matrix string")
@@ -75,17 +73,15 @@ func main() {
 }
 
 type config struct {
-	postgresDSN        string
-	ghcrOwner          string
-	ghcrUsername       string
-	ghcrToken          string
-	ghcrSeedRepository string
-	ghcrSeedWorkflow   string
-	ghcrSeedRef        string
-	target             string
-	sharedTargets      string
-	matrix             string
-	timeout            time.Duration
+	postgresDSN   string
+	ghcrOwner     string
+	ghcrUsername  string
+	ghcrToken     string
+	ghcrSourceURL string
+	target        string
+	sharedTargets string
+	matrix        string
+	timeout       time.Duration
 }
 
 func (c *config) validate() error {
@@ -188,15 +184,13 @@ func run(cfg config) error {
 
 	e2e := suite{
 		cfg: configData{
-			ghcrOwner:          cfg.ghcrOwner,
-			ghcrUsername:       cfg.ghcrUsername,
-			ghcrToken:          cfg.ghcrToken,
-			ghcrSeedRepository: cfg.ghcrSeedRepository,
-			ghcrSeedWorkflow:   cfg.ghcrSeedWorkflow,
-			ghcrSeedRef:        cfg.ghcrSeedRef,
-			target:             mainTarget,
-			matrix:             matrix,
-			sharedTargets:      sharedTargets,
+			ghcrOwner:     cfg.ghcrOwner,
+			ghcrUsername:  cfg.ghcrUsername,
+			ghcrToken:     cfg.ghcrToken,
+			ghcrSourceURL: cfg.ghcrSourceURL,
+			target:        mainTarget,
+			matrix:        matrix,
+			sharedTargets: sharedTargets,
 		},
 		formulas:  formulaStore,
 		artifacts: artifactStore,
@@ -247,15 +241,13 @@ func (t target) ModuleVersion() module.Version {
 }
 
 type configData struct {
-	ghcrOwner          string
-	ghcrUsername       string
-	ghcrToken          string
-	ghcrSeedRepository string
-	ghcrSeedWorkflow   string
-	ghcrSeedRef        string
-	target             target
-	matrix             formula.Matrix
-	sharedTargets      []target
+	ghcrOwner     string
+	ghcrUsername  string
+	ghcrToken     string
+	ghcrSourceURL string
+	target        target
+	matrix        formula.Matrix
+	sharedTargets []target
 }
 
 type suite struct {
@@ -1042,26 +1034,16 @@ type countingUploader struct {
 func newCountingUploader(cfg configData) *countingUploader {
 	return &countingUploader{
 		inner: artifactuploader.NewGHCR(artifactuploader.GHCRConfig{
-			Owner:          cfg.ghcrOwner,
-			Username:       cfg.ghcrUsername,
-			Token:          cfg.ghcrToken,
-			SeedRepository: cfg.ghcrSeedRepository,
-			SeedWorkflow:   cfg.ghcrSeedWorkflow,
-			SeedRef:        cfg.ghcrSeedRef,
+			Owner:     cfg.ghcrOwner,
+			Username:  cfg.ghcrUsername,
+			Token:     cfg.ghcrToken,
+			SourceURL: cfg.ghcrSourceURL,
 		}),
 	}
 }
 
 func (u *countingUploader) Type() string {
 	return u.inner.Type()
-}
-
-func (u *countingUploader) Seed(ctx context.Context, opts artifactuploader.Options) error {
-	seeder, ok := u.inner.(artifactuploader.PackageSeeder)
-	if !ok {
-		return nil
-	}
-	return seeder.Seed(ctx, opts)
 }
 
 func (u *countingUploader) Upload(ctx context.Context, r io.ReadSeeker, opts artifactuploader.Options) (artifactuploader.Result, error) {

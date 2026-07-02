@@ -122,11 +122,6 @@ func (c *artifactCache) Put(ctx context.Context, key CacheKey, outputDir string,
 		Type:  c.archiveType,
 		Attrs: c.uploadAttrs(c.uploader.Type(), key),
 	}
-	if seeder, ok := c.uploader.(uploader.PackageSeeder); ok {
-		if err := seeder.Seed(ctx, opts); err != nil {
-			return CacheEntry{}, fmt.Errorf("seed artifact package: %w", err)
-		}
-	}
 	uploaded, err := c.upload(ctx, outputDir, entry, uploadType, opts)
 	if err != nil {
 		return CacheEntry{}, err
@@ -135,11 +130,11 @@ func (c *artifactCache) Put(ctx context.Context, key CacheKey, outputDir string,
 	// the artifact tag itself, so the database remains the source of truth.
 	//
 	// Scenario 1: artifact already exists
-	//   Get -> artifact found -> skip seed/upload
+	//   Get -> artifact found -> skip upload
 	//
 	// Scenario 2: two builders miss the cache at the same time
-	//   builder A -> seed -> upload -> Put stores artifact A
-	//   builder B -> seed -> upload -> Put returns artifact A instead of replacing it
+	//   builder A -> Upload creates/waits package -> Put stores artifact A
+	//   builder B -> Upload creates/waits package -> Put returns artifact A instead of replacing it
 	stored, err = c.store.Put(ctx, keyForStore, uploaded)
 	if err != nil {
 		return CacheEntry{}, fmt.Errorf("put artifact: %w", err)
