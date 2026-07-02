@@ -197,11 +197,13 @@ func buildZlibWithLLAR(t *testing.T, version, matrix string) (string, string, st
 		t.Fatalf("UserCacheDir: %v", err)
 	}
 
-	cmd := exec.Command(llar, "make", "madler/zlib@"+version)
+	formulaRoot := kodoE2EFormulaRoot(t)
+	cmd := exec.Command(llar, "make", "./madler/zlib@"+version)
+	cmd.Dir = formulaRoot
 	cmd.Env = os.Environ()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("llar make madler/zlib@%s failed: %v\n%s", version, err, out)
+		t.Fatalf("llar make ./madler/zlib@%s failed: %v\n%s", version, err, out)
 	}
 
 	metadata := strings.TrimSpace(string(out))
@@ -218,6 +220,20 @@ func buildZlibWithLLAR(t *testing.T, version, matrix string) (string, string, st
 		t.Fatalf("zlib lib dir not found in %s: %v", installDir, err)
 	}
 	return workspaceDir, installDir, metadata
+}
+
+func kodoE2EFormulaRoot(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "../../.."))
+	dir := filepath.Join(root, "testdata", "kodo-e2e", "formulas")
+	if _, err := os.Stat(filepath.Join(dir, "madler", "zlib", "versions.json")); err != nil {
+		t.Fatalf("kodo e2e formula root: %v", err)
+	}
+	return dir
 }
 
 func hostMatrix() string {

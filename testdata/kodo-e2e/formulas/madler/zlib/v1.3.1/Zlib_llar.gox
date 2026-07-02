@@ -1,0 +1,31 @@
+import "os"
+
+id "madler/zlib"
+
+fromVer "v1.3.1"
+
+onBuild (ctx, proj, out) => {
+	installDir, err := ctx.outputDir()
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	exec "mkdir", "-p", installDir + "/include", installDir + "/lib"
+	if lastErr != nil {
+		out.addErr lastErr
+		return
+	}
+	err = os.writeFile(installDir+"/include/zlib.h", []byte("/* zlib e2e fixture */\n"), 0o644)
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = os.writeFile(installDir+"/lib/libz.a", []byte("zlib fixture archive\n"), 0o644)
+	if err != nil {
+		out.addErr err
+		return
+	}
+
+	out.setMetadata "-lz"
+}
