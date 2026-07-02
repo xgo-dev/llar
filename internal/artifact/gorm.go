@@ -61,59 +61,16 @@ func (s *GormStore) Put(ctx context.Context, key Key, artifact Artifact) (Artifa
 			{Name: "matrix_str"},
 		},
 		DoUpdates: clause.Set{
-			{
-				Column: clause.Column{Name: "source_type"},
-				Value:  clause.Column{Table: clause.CurrentTable, Name: "source_type"},
-			},
+			{Column: clause.Column{Name: "source_type"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.source_type ELSE source_type END")},
+			{Column: clause.Column{Name: "source_url"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.source_url ELSE source_url END")},
+			{Column: clause.Column{Name: "type"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.type ELSE type END")},
+			{Column: clause.Column{Name: "metadata"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.metadata ELSE metadata END")},
+			{Column: clause.Column{Name: "checksum"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.checksum ELSE checksum END")},
+			{Column: clause.Column{Name: "created_at"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.created_at ELSE created_at END")},
 		},
 	}, clause.Returning{}).Create(&record).Error
 	if err != nil {
 		return Artifact{}, fmt.Errorf("insert artifact: %w", err)
-	}
-	return record.artifact(), nil
-}
-
-func (s *GormStore) GetOrUpdate(ctx context.Context, key Key, update func() (Artifact, error)) (Artifact, error) {
-	var record artifactRecord
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("module = ? AND version = ? AND matrix_str = ?", key.Module, key.Version, key.MatrixStr).
-			First(&record).Error
-		if err != nil {
-			return fmt.Errorf("lock artifact: %w", err)
-		}
-		if record.SourceURL != "" {
-			return nil
-		}
-
-		artifact, err := update()
-		if err != nil {
-			return err
-		}
-		record.SourceType = artifact.Source.Type
-		record.SourceURL = artifact.Source.URL
-		record.Type = artifact.Type
-		record.Metadata = artifact.Metadata
-		record.Checksum = artifact.Checksum
-		record.CreatedAt = time.Now().UTC()
-
-		err = tx.Model(&artifactRecord{}).
-			Where("module = ? AND version = ? AND matrix_str = ?", key.Module, key.Version, key.MatrixStr).
-			Updates(map[string]any{
-				"source_type": record.SourceType,
-				"source_url":  record.SourceURL,
-				"type":        record.Type,
-				"metadata":    record.Metadata,
-				"checksum":    record.Checksum,
-				"created_at":  record.CreatedAt,
-			}).Error
-		if err != nil {
-			return fmt.Errorf("update artifact: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return Artifact{}, err
 	}
 	return record.artifact(), nil
 }

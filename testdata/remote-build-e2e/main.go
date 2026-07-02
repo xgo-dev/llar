@@ -30,6 +30,8 @@ import (
 	"github.com/google/go-github/v68/github"
 	"github.com/goplus/llar/formula"
 	artifact "github.com/goplus/llar/internal/artifact"
+	artifactdownloader "github.com/goplus/llar/internal/artifact/downloader"
+	artifactuploader "github.com/goplus/llar/internal/artifact/uploader"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
@@ -53,6 +55,9 @@ func main() {
 	flag.StringVar(&cfg.ghcrOwner, "ghcr-owner", "", "GHCR owner")
 	flag.StringVar(&cfg.ghcrUsername, "ghcr-username", "", "GHCR username")
 	flag.StringVar(&cfg.ghcrToken, "ghcr-token", "", "GHCR token")
+	flag.StringVar(&cfg.ghcrSeedRepository, "ghcr-seed-repository", "", "GitHub owner/repo containing the GHCR seed workflow")
+	flag.StringVar(&cfg.ghcrSeedWorkflow, "ghcr-seed-workflow", "ghcr-package-seed.yml", "GHCR seed workflow file")
+	flag.StringVar(&cfg.ghcrSeedRef, "ghcr-seed-ref", "", "Git ref for the GHCR seed workflow")
 	flag.StringVar(&cfg.target, "target", defaultTarget, "target module@version")
 	flag.StringVar(&cfg.sharedTargets, "shared-targets", defaultSharedTargets, "comma-separated module@version targets sharing a dependency")
 	flag.StringVar(&cfg.matrix, "matrix", "", "matrix string")
@@ -70,14 +75,17 @@ func main() {
 }
 
 type config struct {
-	postgresDSN   string
-	ghcrOwner     string
-	ghcrUsername  string
-	ghcrToken     string
-	target        string
-	sharedTargets string
-	matrix        string
-	timeout       time.Duration
+	postgresDSN        string
+	ghcrOwner          string
+	ghcrUsername       string
+	ghcrToken          string
+	ghcrSeedRepository string
+	ghcrSeedWorkflow   string
+	ghcrSeedRef        string
+	target             string
+	sharedTargets      string
+	matrix             string
+	timeout            time.Duration
 }
 
 func (c *config) validate() error {
@@ -180,12 +188,15 @@ func run(cfg config) error {
 
 	e2e := suite{
 		cfg: configData{
-			ghcrOwner:     cfg.ghcrOwner,
-			ghcrUsername:  cfg.ghcrUsername,
-			ghcrToken:     cfg.ghcrToken,
-			target:        mainTarget,
-			matrix:        matrix,
-			sharedTargets: sharedTargets,
+			ghcrOwner:          cfg.ghcrOwner,
+			ghcrUsername:       cfg.ghcrUsername,
+			ghcrToken:          cfg.ghcrToken,
+			ghcrSeedRepository: cfg.ghcrSeedRepository,
+			ghcrSeedWorkflow:   cfg.ghcrSeedWorkflow,
+			ghcrSeedRef:        cfg.ghcrSeedRef,
+			target:             mainTarget,
+			matrix:             matrix,
+			sharedTargets:      sharedTargets,
 		},
 		formulas:  formulaStore,
 		artifacts: artifactStore,
@@ -236,12 +247,15 @@ func (t target) ModuleVersion() module.Version {
 }
 
 type configData struct {
-	ghcrOwner     string
-	ghcrUsername  string
-	ghcrToken     string
-	target        target
-	matrix        formula.Matrix
-	sharedTargets []target
+	ghcrOwner          string
+	ghcrUsername       string
+	ghcrToken          string
+	ghcrSeedRepository string
+	ghcrSeedWorkflow   string
+	ghcrSeedRef        string
+	target             target
+	matrix             formula.Matrix
+	sharedTargets      []target
 }
 
 type suite struct {
@@ -493,13 +507,12 @@ func (s *suite) build(ctx context.Context, builder *build.Builder, target target
 	return builder.Build(ctx, mods)
 }
 
-func (s *suite) newBuilder(matrix formula.Matrix, uploader artifact.Uploader) (*build.Builder, error) {
+func (s *suite) newBuilder(matrix formula.Matrix, upload artifactuploader.Uploader) (*build.Builder, error) {
 	workspaceDir, err := os.MkdirTemp("", "llar-build-cache-e2e-workspace-*")
 	if err != nil {
 		return nil, err
 	}
-	downloader := artifact.NewGHCR(artifact.GHCRConfig{
-		Owner:    s.cfg.ghcrOwner,
+	download := artifactdownloader.NewGHCR(artifactdownloader.GHCRConfig{
 		Username: s.cfg.ghcrUsername,
 		Token:    s.cfg.ghcrToken,
 	})
@@ -509,8 +522,8 @@ func (s *suite) newBuilder(matrix formula.Matrix, uploader artifact.Uploader) (*
 		WorkspaceDir: workspaceDir,
 		Cache: build.NewArtifactCache(build.ArtifactCacheOptions{
 			Store:      s.artifacts,
-			Uploader:   uploader,
-			Downloader: downloader,
+			Uploader:   upload,
+			Downloader: download,
 			Attrs:      matrixAttrs(matrix),
 		}),
 	})
@@ -692,7 +705,7 @@ func assertArtifact(ctx context.Context, cfg configData, target target, matrix f
 	return assertGHCRTag(ctx, cfg, target, matrix, got, size)
 }
 
-func assertUploadOptions(opts artifact.Options, target target, matrix formula.Matrix) error {
+func assertUploadOptions(opts artifactuploader.Options, target target, matrix formula.Matrix) error {
 	if opts.Name != target.Module {
 		return fmt.Errorf("upload name = %q, want %q", opts.Name, target.Module)
 	}
@@ -707,7 +720,7 @@ func assertUploadOptions(opts artifact.Options, target target, matrix formula.Ma
 	return nil
 }
 
-func assertOneUploadForTarget(options []artifact.Options, target target, matrix formula.Matrix) error {
+func assertOneUploadForTarget(options []artifactuploader.Options, target target, matrix formula.Matrix) error {
 	count := 0
 	for _, opts := range options {
 		if opts.Name != target.Module {
@@ -1022,16 +1035,19 @@ func assertStoredArtifact(ctx context.Context, store artifact.Store, target targ
 type countingUploader struct {
 	mu      sync.Mutex
 	calls   int
-	options []artifact.Options
-	inner   artifact.Uploader
+	options []artifactuploader.Options
+	inner   artifactuploader.Uploader
 }
 
 func newCountingUploader(cfg configData) *countingUploader {
 	return &countingUploader{
-		inner: artifact.NewGHCR(artifact.GHCRConfig{
-			Owner:    cfg.ghcrOwner,
-			Username: cfg.ghcrUsername,
-			Token:    cfg.ghcrToken,
+		inner: artifactuploader.NewGHCR(artifactuploader.GHCRConfig{
+			Owner:          cfg.ghcrOwner,
+			Username:       cfg.ghcrUsername,
+			Token:          cfg.ghcrToken,
+			SeedRepository: cfg.ghcrSeedRepository,
+			SeedWorkflow:   cfg.ghcrSeedWorkflow,
+			SeedRef:        cfg.ghcrSeedRef,
 		}),
 	}
 }
@@ -1040,7 +1056,15 @@ func (u *countingUploader) Type() string {
 	return u.inner.Type()
 }
 
-func (u *countingUploader) Upload(ctx context.Context, r io.ReadSeeker, opts artifact.Options) (artifact.Result, error) {
+func (u *countingUploader) Seed(ctx context.Context, opts artifactuploader.Options) error {
+	seeder, ok := u.inner.(artifactuploader.PackageSeeder)
+	if !ok {
+		return nil
+	}
+	return seeder.Seed(ctx, opts)
+}
+
+func (u *countingUploader) Upload(ctx context.Context, r io.ReadSeeker, opts artifactuploader.Options) (artifactuploader.Result, error) {
 	u.mu.Lock()
 	u.calls++
 	u.options = append(u.options, opts)
@@ -1048,24 +1072,24 @@ func (u *countingUploader) Upload(ctx context.Context, r io.ReadSeeker, opts art
 
 	offset, err := r.Seek(0, io.SeekCurrent)
 	if err != nil {
-		return artifact.Result{}, err
+		return artifactuploader.Result{}, err
 	}
 	hash, size, err := v1.SHA256(r)
 	if err != nil {
-		return artifact.Result{}, err
+		return artifactuploader.Result{}, err
 	}
 	if _, err := r.Seek(offset, io.SeekStart); err != nil {
-		return artifact.Result{}, err
+		return artifactuploader.Result{}, err
 	}
 	result, err := u.inner.Upload(ctx, r, opts)
 	if err != nil {
-		return artifact.Result{}, err
+		return artifactuploader.Result{}, err
 	}
 	if result.Checksum != hash.Hex {
-		return artifact.Result{}, fmt.Errorf("upload checksum = %q, want archive checksum %q", result.Checksum, hash.Hex)
+		return artifactuploader.Result{}, fmt.Errorf("upload checksum = %q, want archive checksum %q", result.Checksum, hash.Hex)
 	}
 	if result.Size != size {
-		return artifact.Result{}, fmt.Errorf("upload size = %d, want archive size %d", result.Size, size)
+		return artifactuploader.Result{}, fmt.Errorf("upload size = %d, want archive size %d", result.Size, size)
 	}
 	return result, nil
 }
@@ -1076,10 +1100,10 @@ func (u *countingUploader) Calls() int {
 	return u.calls
 }
 
-func (u *countingUploader) Options() []artifact.Options {
+func (u *countingUploader) Options() []artifactuploader.Options {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return append([]artifact.Options(nil), u.options...)
+	return append([]artifactuploader.Options(nil), u.options...)
 }
 
 type buildResult struct {

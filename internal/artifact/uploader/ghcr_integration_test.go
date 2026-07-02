@@ -1,4 +1,4 @@
-package artifact
+package uploader
 
 import (
 	"archive/tar"

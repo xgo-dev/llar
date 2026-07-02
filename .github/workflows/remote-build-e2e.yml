@@ -64,8 +64,12 @@ jobs:
           GHCR_OWNER: ${{ secrets.GHCR_OWNER }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GHCR_SEED_REPOSITORY: ${{ github.repository }}
+          GHCR_SEED_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
         run: >-
           go run .
           --ghcr-owner "$GHCR_OWNER"
           --ghcr-username "$GHCR_USERNAME"
           --ghcr-token "$GHCR_TOKEN"
+          --ghcr-seed-repository "$GHCR_SEED_REPOSITORY"
+          --ghcr-seed-ref "$GHCR_SEED_REF"

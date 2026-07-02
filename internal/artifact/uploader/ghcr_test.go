@@ -1,4 +1,4 @@
-package artifact
+package uploader
 
 import (
 	"bytes"
@@ -27,52 +27,6 @@ func TestNewGHCRReturnsGHCRUploader(t *testing.T) {
 	}
 	if got.writeIndex == nil {
 		t.Fatal("writeIndex is nil")
-	}
-}
-
-func TestChecksumResultReadsFromCurrentOffsetAndRestoresReader(t *testing.T) {
-	r := bytes.NewReader([]byte("prefixartifact-bytes"))
-	if _, err := r.Seek(int64(len("prefix")), io.SeekStart); err != nil {
-		t.Fatalf("Seek: %v", err)
-	}
-
-	got, err := checksumResult(r)
-	if err != nil {
-		t.Fatalf("checksumResult: %v", err)
-	}
-
-	payload := []byte("artifact-bytes")
-	sum := sha256.Sum256(payload)
-	if got.Size != int64(len(payload)) {
-		t.Fatalf("Size = %d, want %d", got.Size, len(payload))
-	}
-	if got.Checksum != hex.EncodeToString(sum[:]) {
-		t.Fatalf("Checksum = %q", got.Checksum)
-	}
-	offset, err := r.Seek(0, io.SeekCurrent)
-	if err != nil {
-		t.Fatalf("Seek current: %v", err)
-	}
-	if offset != int64(len("prefix")) {
-		t.Fatalf("offset = %d, want %d", offset, len("prefix"))
-	}
-}
-
-func TestChecksumResultReportsReaderErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		r    io.ReadSeeker
-	}{
-		{name: "initial seek", r: seekErrorReader{}},
-		{name: "read", r: readErrorSeeker{}},
-		{name: "restore seek", r: &secondSeekErrorReader{Reader: bytes.NewReader([]byte("archive"))}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if _, err := checksumResult(tt.r); !errors.Is(err, errTestUpload) {
-				t.Fatalf("checksumResult error = %v, want %v", err, errTestUpload)
-			}
-		})
 	}
 }
 

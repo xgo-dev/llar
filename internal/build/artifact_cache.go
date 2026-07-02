@@ -10,21 +10,23 @@ import (
 
 	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/artifact/archiver"
+	"github.com/goplus/llar/internal/artifact/downloader"
+	"github.com/goplus/llar/internal/artifact/uploader"
 	"github.com/goplus/llar/mod/module"
 )
 
 type ArtifactCacheOptions struct {
 	Store       artifact.Store
-	Uploader    artifact.Uploader
-	Downloader  artifact.Downloader
+	Uploader    uploader.Uploader
+	Downloader  downloader.Downloader
 	ArchiveType string
 	Attrs       map[string]string
 }
 
 type artifactCache struct {
 	store       artifact.Store
-	uploader    artifact.Uploader
-	downloader  artifact.Downloader
+	uploader    uploader.Uploader
+	downloader  downloader.Downloader
 	archiveType string
 	attrs       map[string]string
 }
@@ -105,43 +107,48 @@ func (c *artifactCache) Put(ctx context.Context, key CacheKey, outputDir string,
 
 	keyForStore := artifactKey(key)
 
-	// GHCR tags are mutable. If two workers upload the same artifact key, the
-	// last push wins, so GHCR cannot decide the canonical artifact. The artifact
-	// row is the distributed lock and source of truth.
-	//
-	// Example key: madler/zlib@v1.3.1 linux/amd64
-	//
-	// Scenario 1: artifact already exists
-	//   worker B -> Put(empty placeholder) -> source_url != ""
-	//   worker B -> return worker A's artifact without packing/uploading
-	//
-	// Scenario 2: artifact does not exist
-	//   worker A -> Put(empty placeholder) -> source_url == ""
-	//   worker A -> GetOrUpdate -> lock row -> pack/upload -> update source_url
-	//   worker B -> wait for row lock -> source_url != "" -> return A's artifact
-	stored, err := c.store.Put(ctx, keyForStore, artifact.Artifact{})
+	stored, ok, err := c.store.Get(ctx, keyForStore)
 	if err != nil {
-		return CacheEntry{}, fmt.Errorf("put artifact placeholder: %w", err)
+		return CacheEntry{}, fmt.Errorf("get artifact: %w", err)
 	}
-	if stored.Source.URL != "" {
+	if ok {
 		entry.Metadata = stored.Metadata
 		return entry, nil
 	}
-	stored, err = c.store.GetOrUpdate(ctx, keyForStore, func() (artifact.Artifact, error) {
-		uploaded, err := c.upload(ctx, key, outputDir, entry, uploadType)
-		if err != nil {
-			return artifact.Artifact{}, err
+
+	opts := uploader.Options{
+		Name:  key.Module.Path,
+		Tag:   key.Module.Version,
+		Type:  c.archiveType,
+		Attrs: c.uploadAttrs(c.uploader.Type(), key),
+	}
+	if seeder, ok := c.uploader.(uploader.PackageSeeder); ok {
+		if err := seeder.Seed(ctx, opts); err != nil {
+			return CacheEntry{}, fmt.Errorf("seed artifact package: %w", err)
 		}
-		return uploaded, nil
-	})
+	}
+	uploaded, err := c.upload(ctx, outputDir, entry, uploadType, opts)
 	if err != nil {
-		return CacheEntry{}, fmt.Errorf("get or update artifact: %w", err)
+		return CacheEntry{}, err
+	}
+	// GHCR does not give concurrent writers a stable "already exists" result for
+	// the artifact tag itself, so the database remains the source of truth.
+	//
+	// Scenario 1: artifact already exists
+	//   Get -> artifact found -> skip seed/upload
+	//
+	// Scenario 2: two builders miss the cache at the same time
+	//   builder A -> seed -> upload -> Put stores artifact A
+	//   builder B -> seed -> upload -> Put returns artifact A instead of replacing it
+	stored, err = c.store.Put(ctx, keyForStore, uploaded)
+	if err != nil {
+		return CacheEntry{}, fmt.Errorf("put artifact: %w", err)
 	}
 	entry.Metadata = stored.Metadata
 	return entry, nil
 }
 
-func (c *artifactCache) upload(ctx context.Context, key CacheKey, outputDir string, entry CacheEntry, uploadType string) (artifact.Artifact, error) {
+func (c *artifactCache) upload(ctx context.Context, outputDir string, entry CacheEntry, uploadType string, opts uploader.Options) (artifact.Artifact, error) {
 	tmpDir, err := os.MkdirTemp("", "llar-artifact-cache-*")
 	if err != nil {
 		return artifact.Artifact{}, err
@@ -164,12 +171,7 @@ func (c *artifactCache) upload(ctx context.Context, key CacheKey, outputDir stri
 	}
 	defer archive.Close()
 
-	uploaded, err := c.uploader.Upload(ctx, archive, artifact.Options{
-		Name:  key.Module.Path,
-		Tag:   key.Module.Version,
-		Type:  c.archiveType,
-		Attrs: c.uploadAttrs(c.uploader.Type(), key),
-	})
+	uploaded, err := c.uploader.Upload(ctx, archive, opts)
 	if err != nil {
 		return artifact.Artifact{}, fmt.Errorf("upload artifact: %w", err)
 	}

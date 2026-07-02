@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/goplus/llar/internal/artifact"
+	artifactuploader "github.com/goplus/llar/internal/artifact/uploader"
 	"github.com/goplus/llar/mod/module"
 )
 
@@ -26,7 +27,7 @@ func TestArtifactCachePutUploadsAndStoresArtifact(t *testing.T) {
 	}
 	store := &fakeArtifactStore{}
 	uploader := &fakeArtifactUploader{
-		result: artifact.Result{
+		result: artifactuploader.Result{
 			URL:      "https://ghcr.io/v2/meteorsliu/test/lib/blobs/sha256:abc",
 			Checksum: "abc",
 		},
@@ -55,7 +56,7 @@ func TestArtifactCachePutUploadsAndStoresArtifact(t *testing.T) {
 	if got.Metadata != "-lfoo" {
 		t.Fatalf("metadata = %q, want -lfoo", got.Metadata)
 	}
-	wantOptions := artifact.Options{
+	wantOptions := artifactuploader.Options{
 		Name: "test/lib",
 		Tag:  "1.0.0",
 		Type: "tar.gz",
@@ -80,9 +81,6 @@ func TestArtifactCachePutUploadsAndStoresArtifact(t *testing.T) {
 	if store.putCalls != 1 {
 		t.Fatalf("store Put calls = %d, want 1", store.putCalls)
 	}
-	if store.getOrUpdateCalls != 1 {
-		t.Fatalf("store GetOrUpdate calls = %d, want 1", store.getOrUpdateCalls)
-	}
 	files := readArtifactTarGz(t, uploader.payload)
 	if string(files["lib/libfoo.a"]) != "archive" {
 		t.Fatalf("artifact lib/libfoo.a = %q, want archive", files["lib/libfoo.a"])
@@ -99,10 +97,95 @@ func TestArtifactCachePutUploadsAndStoresArtifact(t *testing.T) {
 	}
 }
 
+func TestArtifactCachePutSeedsPackageBeforeUploading(t *testing.T) {
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outputDir, "libfoo.a"), []byte("archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	events := []string{}
+	store := &fakeArtifactStore{}
+	uploader := &fakeSeedingUploader{
+		fakeArtifactUploader: fakeArtifactUploader{
+			result: artifactuploader.Result{
+				URL:      "https://ghcr.io/v2/meteorsliu/test/lib/blobs/sha256:abc",
+				Checksum: "abc",
+			},
+			events: &events,
+		},
+	}
+	cache := NewArtifactCache(ArtifactCacheOptions{
+		Store:    store,
+		Uploader: uploader,
+	})
+	key := CacheKey{
+		Module: module.Version{Path: "test/lib", Version: "1.0.0"},
+		Matrix: "amd64-linux",
+	}
+
+	if _, err := cache.Put(context.Background(), key, outputDir, CacheEntry{Metadata: "-lfoo"}); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	wantEvents := []string{"seed", "upload"}
+	if !reflect.DeepEqual(events, wantEvents) {
+		t.Fatalf("events = %+v, want %+v", events, wantEvents)
+	}
+	wantOptions := artifactuploader.Options{
+		Name: "test/lib",
+		Tag:  "1.0.0",
+		Type: "tar.gz",
+		Attrs: map[string]string{
+			"org.llar.matrix": "amd64-linux",
+		},
+	}
+	if !reflect.DeepEqual(uploader.seedOptions, wantOptions) {
+		t.Fatalf("seed options = %+v, want %+v", uploader.seedOptions, wantOptions)
+	}
+}
+
+func TestArtifactCachePutReturnsCanonicalArtifactFromStore(t *testing.T) {
+	outputDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outputDir, "libfoo.a"), []byte("archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	canonical := artifact.Artifact{
+		Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/test/lib/blobs/sha256:existing"},
+		Type:     "tar.gz",
+		Metadata: "-lexisting",
+		Checksum: "existing",
+	}
+	store := &fakeArtifactStore{putReturn: canonical}
+	uploader := &fakeArtifactUploader{
+		result: artifactuploader.Result{
+			URL:      "https://ghcr.io/v2/meteorsliu/test/lib/blobs/sha256:new",
+			Checksum: "new",
+		},
+	}
+	cache := NewArtifactCache(ArtifactCacheOptions{
+		Store:    store,
+		Uploader: uploader,
+	})
+	key := CacheKey{
+		Module: module.Version{Path: "test/lib", Version: "1.0.0"},
+		Matrix: "amd64-linux",
+	}
+
+	got, err := cache.Put(context.Background(), key, outputDir, CacheEntry{Metadata: "-lfoo"})
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got.Metadata != canonical.Metadata {
+		t.Fatalf("metadata = %q, want %q", got.Metadata, canonical.Metadata)
+	}
+	if uploader.payload == nil {
+		t.Fatal("uploader payload = nil, want upload before store conflict resolution")
+	}
+}
+
 func TestArtifactCachePutReturnsExistingArtifactWithoutUploading(t *testing.T) {
 	outputDir := t.TempDir()
 	store := &fakeArtifactStore{
-		putReturn: artifact.Artifact{
+		getOK: true,
+		getValue: artifact.Artifact{
 			Source:   artifact.Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/test/lib/blobs/sha256:existing"},
 			Type:     "tar.gz",
 			Metadata: "-lexisting",
@@ -110,7 +193,7 @@ func TestArtifactCachePutReturnsExistingArtifactWithoutUploading(t *testing.T) {
 		},
 	}
 	uploader := &fakeArtifactUploader{
-		result: artifact.Result{URL: "unused", Checksum: "unused"},
+		result: artifactuploader.Result{URL: "unused", Checksum: "unused"},
 	}
 	cache := NewArtifactCache(ArtifactCacheOptions{
 		Store:    store,
@@ -131,8 +214,8 @@ func TestArtifactCachePutReturnsExistingArtifactWithoutUploading(t *testing.T) {
 	if uploader.payload != nil {
 		t.Fatalf("uploader payload = %q, want nil", uploader.payload)
 	}
-	if store.getOrUpdateCalls != 0 {
-		t.Fatalf("store GetOrUpdate calls = %d, want 0", store.getOrUpdateCalls)
+	if store.putCalls != 0 {
+		t.Fatalf("store Put calls = %d, want 0", store.putCalls)
 	}
 }
 
@@ -144,7 +227,7 @@ func TestArtifactCachePutOmitsAttrsForNonGHCRUploader(t *testing.T) {
 	store := &fakeArtifactStore{}
 	uploader := &fakeArtifactUploader{
 		typ:    "file",
-		result: artifact.Result{URL: "file:///tmp/libfoo.tar.gz", Checksum: "abc"},
+		result: artifactuploader.Result{URL: "file:///tmp/libfoo.tar.gz", Checksum: "abc"},
 	}
 	cache := NewArtifactCache(ArtifactCacheOptions{
 		Store:    store,
@@ -233,12 +316,11 @@ func TestArtifactCacheGetDownloadsAndUnpacksArtifact(t *testing.T) {
 }
 
 type fakeArtifactStore struct {
-	getOK            bool
-	getValue         artifact.Artifact
-	putReturn        artifact.Artifact
-	value            artifact.Artifact
-	putCalls         int
-	getOrUpdateCalls int
+	getOK     bool
+	getValue  artifact.Artifact
+	putReturn artifact.Artifact
+	value     artifact.Artifact
+	putCalls  int
 }
 
 func (s *fakeArtifactStore) Get(context.Context, artifact.Key) (artifact.Artifact, bool, error) {
@@ -250,15 +332,6 @@ func (s *fakeArtifactStore) Put(ctx context.Context, key artifact.Key, value art
 	if s.putReturn != (artifact.Artifact{}) {
 		return s.putReturn, nil
 	}
-	return value, nil
-}
-
-func (s *fakeArtifactStore) GetOrUpdate(ctx context.Context, key artifact.Key, update func() (artifact.Artifact, error)) (artifact.Artifact, error) {
-	s.getOrUpdateCalls++
-	value, err := update()
-	if err != nil {
-		return artifact.Artifact{}, err
-	}
 	s.value = value
 	return value, nil
 }
@@ -269,9 +342,10 @@ func (s *fakeArtifactStore) Delete(context.Context, artifact.Key) error {
 
 type fakeArtifactUploader struct {
 	typ     string
-	result  artifact.Result
-	options artifact.Options
+	result  artifactuploader.Result
+	options artifactuploader.Options
 	payload []byte
+	events  *[]string
 }
 
 func (u *fakeArtifactUploader) Type() string {
@@ -281,14 +355,30 @@ func (u *fakeArtifactUploader) Type() string {
 	return "ghcr"
 }
 
-func (u *fakeArtifactUploader) Upload(ctx context.Context, r io.ReadSeeker, opts artifact.Options) (artifact.Result, error) {
+func (u *fakeArtifactUploader) Upload(ctx context.Context, r io.ReadSeeker, opts artifactuploader.Options) (artifactuploader.Result, error) {
+	if u.events != nil {
+		*u.events = append(*u.events, "upload")
+	}
 	payload, err := io.ReadAll(r)
 	if err != nil {
-		return artifact.Result{}, err
+		return artifactuploader.Result{}, err
 	}
 	u.options = opts
 	u.payload = payload
 	return u.result, nil
+}
+
+type fakeSeedingUploader struct {
+	fakeArtifactUploader
+	seedOptions artifactuploader.Options
+}
+
+func (u *fakeSeedingUploader) Seed(ctx context.Context, opts artifactuploader.Options) error {
+	if u.events != nil {
+		*u.events = append(*u.events, "seed")
+	}
+	u.seedOptions = opts
+	return nil
 }
 
 type fakeArtifactDownloader struct {

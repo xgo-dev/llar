@@ -131,7 +131,7 @@ func TestGormStorePutReturnsCanonicalArtifactWithoutSelect(t *testing.T) {
 	}
 }
 
-func TestGormStorePutCreatesPlaceholderAndGetOrUpdateStoresArtifact(t *testing.T) {
+func TestGormStorePutCreatesPlaceholderAndNextPutStoresArtifact(t *testing.T) {
 	store, _ := newTestGormStore(t)
 
 	ctx := context.Background()
@@ -156,47 +156,27 @@ func TestGormStorePutCreatesPlaceholderAndGetOrUpdateStoresArtifact(t *testing.T
 		t.Fatalf("Get placeholder ok = true, artifact = %+v", got)
 	}
 
-	calls := 0
-	got, err := store.GetOrUpdate(ctx, key, func() (Artifact, error) {
-		calls++
-		return want, nil
-	})
+	got, err := store.Put(ctx, key, want)
 	if err != nil {
-		t.Fatalf("GetOrUpdate: %v", err)
+		t.Fatalf("Put artifact: %v", err)
 	}
 	if got != want {
-		t.Fatalf("GetOrUpdate = %+v, want %+v", got, want)
-	}
-	if calls != 1 {
-		t.Fatalf("update calls = %d, want 1", calls)
+		t.Fatalf("Put artifact = %+v, want %+v", got, want)
 	}
 
 	stored, ok, err := store.Get(ctx, key)
 	if err != nil {
-		t.Fatalf("Get after GetOrUpdate: %v", err)
+		t.Fatalf("Get after Put artifact: %v", err)
 	}
 	if !ok {
-		t.Fatal("Get after GetOrUpdate ok = false")
+		t.Fatal("Get after Put artifact ok = false")
 	}
 	if stored != want {
-		t.Fatalf("Get after GetOrUpdate = %+v, want %+v", stored, want)
+		t.Fatalf("Get after Put artifact = %+v, want %+v", stored, want)
 	}
 }
 
-func TestGormStoreGetOrUpdateReportsMissingPlaceholder(t *testing.T) {
-	store, _ := newTestGormStore(t)
-
-	ctx := context.Background()
-	key := Key{Module: "madler/zlib", Version: "v1.3.1", MatrixStr: "amd64-linux"}
-	_, err := store.GetOrUpdate(ctx, key, func() (Artifact, error) {
-		return Artifact{}, nil
-	})
-	if err == nil {
-		t.Fatal("GetOrUpdate error = nil, want missing placeholder error")
-	}
-}
-
-func TestGormStoreGetOrUpdateReturnsExistingArtifact(t *testing.T) {
+func TestGormStorePutReturnsExistingArtifactOverNewArtifact(t *testing.T) {
 	store, _ := newTestGormStore(t)
 
 	ctx := context.Background()
@@ -211,24 +191,18 @@ func TestGormStoreGetOrUpdateReturnsExistingArtifact(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 
-	calls := 0
-	got, err := store.GetOrUpdate(ctx, key, func() (Artifact, error) {
-		calls++
-		return Artifact{
-			Source:   Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:new"},
-			Type:     "tar.gz",
-			Metadata: "-lz-new",
-			Checksum: "new",
-		}, nil
-	})
+	newArtifact := Artifact{
+		Source:   Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:new"},
+		Type:     "tar.gz",
+		Metadata: "-lz-new",
+		Checksum: "new",
+	}
+	got, err := store.Put(ctx, key, newArtifact)
 	if err != nil {
-		t.Fatalf("GetOrUpdate: %v", err)
+		t.Fatalf("Put new artifact: %v", err)
 	}
 	if got != existing {
-		t.Fatalf("GetOrUpdate = %+v, want %+v", got, existing)
-	}
-	if calls != 0 {
-		t.Fatalf("update calls = %d, want 0", calls)
+		t.Fatalf("Put new artifact = %+v, want %+v", got, existing)
 	}
 }
 

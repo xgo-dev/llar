@@ -1,4 +1,4 @@
-package artifact
+package uploader
 
 import (
 	"context"
@@ -23,7 +23,6 @@ type Uploader interface {
 	Upload(ctx context.Context, r io.ReadSeeker, opts Options) (Result, error)
 }
 
-type Downloader interface {
-	Type() string
-	Download(ctx context.Context, source Source, checksum string) ([]byte, error)
+type PackageSeeder interface {
+	Seed(ctx context.Context, opts Options) error
 }
