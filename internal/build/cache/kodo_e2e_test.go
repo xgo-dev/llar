@@ -2,7 +2,11 @@ package cache
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,8 +33,15 @@ func TestKodoObjectName(t *testing.T) {
 	if got, want := c.objectName(key), "cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"; got != want {
 		t.Fatalf("object name = %q, want %q", got, want)
 	}
-	if got, want := kodoSourceURL("llar-test", c.objectName(key)), "kodo://llar-test/cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"; got != want {
+	got, err := kodoSourceURL("llar.liuxi.ng", c.objectName(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "http://llar.liuxi.ng/cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"; got != want {
 		t.Fatalf("source url = %q, want %q", got, want)
+	}
+	if _, err := parseKodoSourceURL("file:///cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"); err == nil {
+		t.Fatal("non-http source url should be rejected")
 	}
 }
 
@@ -38,6 +49,7 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	accessKey := os.Getenv("QINIU_ACCESS_KEY")
 	secretKey := os.Getenv("QINIU_SECRET_KEY")
 	bucket := os.Getenv("QINIU_BUCKET")
+	publicDomain := envOrDefault("QINIU_PUBLIC_DOMAIN", "llar.liuxi.ng")
 	if accessKey == "" || secretKey == "" || bucket == "" {
 		t.Skip("QINIU_ACCESS_KEY, QINIU_SECRET_KEY, and QINIU_BUCKET are required")
 	}
@@ -56,12 +68,14 @@ func TestKodoE2E_PutGet(t *testing.T) {
 		AccessKey:    accessKey,
 		SecretKey:    secretKey,
 		Bucket:       bucket,
+		PublicDomain: publicDomain,
 		Prefix:       prefix,
 		WorkspaceDir: workspaceDir,
 		Artifacts:    store,
 	}).(*kodoCache)
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	key := Key{
 		Module: module.Version{Path: "madler/zlib", Version: zlibVersion},
 		Matrix: matrix,
@@ -104,11 +118,18 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	if stored.Source.Type != "kodo" {
 		t.Fatalf("artifact source type = %q, want kodo", stored.Source.Type)
 	}
-	if stored.Source.URL != kodoSourceURL(bucket, objectName) {
-		t.Fatalf("artifact source url = %q, want %q", stored.Source.URL, kodoSourceURL(bucket, objectName))
+	wantURL, err := kodoSourceURL(publicDomain, objectName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Source.URL != wantURL {
+		t.Fatalf("artifact source url = %q, want %q", stored.Source.URL, wantURL)
 	}
 	if stored.Type != "tar.gz" || stored.Metadata != metadata || len(stored.Checksum) != 64 {
 		t.Fatalf("artifact = %+v, want tar.gz metadata %q and sha256 checksum", stored, metadata)
+	}
+	if err := assertPublicURLChecksum(ctx, stored.Source.URL, stored.Checksum); err != nil {
+		t.Fatal(err)
 	}
 
 	if err := os.RemoveAll(installDir); err != nil {
@@ -238,4 +259,35 @@ func kodoE2EFormulaRoot(t *testing.T) string {
 
 func hostMatrix() string {
 	return runtime.GOARCH + "-" + runtime.GOOS
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func assertPublicURLChecksum(ctx context.Context, rawURL, checksum string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: %s", rawURL, resp.Status)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, resp.Body); err != nil {
+		return err
+	}
+	got := hex.EncodeToString(hash.Sum(nil))
+	if got != checksum {
+		return fmt.Errorf("GET %s checksum = %s, want %s", rawURL, got, checksum)
+	}
+	return nil
 }

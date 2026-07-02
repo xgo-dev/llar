@@ -36,6 +36,7 @@ type KodoConfig struct {
 	AccessKey    string
 	SecretKey    string
 	Bucket       string
+	PublicDomain string
 	Prefix       string
 	WorkspaceDir string
 	Artifacts    artifact.Store
@@ -43,6 +44,7 @@ type KodoConfig struct {
 
 type kodoCache struct {
 	bucket       string
+	publicDomain string
 	prefix       string
 	workspaceDir string
 	artifacts    artifact.Store
@@ -57,6 +59,7 @@ func NewKodo(cfg KodoConfig) Cache {
 	options := httpclient.Options{Credentials: cred}
 	return &kodoCache{
 		bucket:       cfg.Bucket,
+		publicDomain: normalizePublicDomain(cfg.PublicDomain),
 		prefix:       strings.Trim(cfg.Prefix, "/"),
 		workspaceDir: cfg.WorkspaceDir,
 		artifacts:    cfg.Artifacts,
@@ -87,12 +90,9 @@ func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
 		if artifact.Source.Type != "kodo" {
 			return Entry{}, false, fmt.Errorf("artifact source type = %q, want kodo", artifact.Source.Type)
 		}
-		bucket, name, err := parseKodoSourceURL(artifact.Source.URL)
+		name, err := parseKodoSourceURL(artifact.Source.URL)
 		if err != nil {
 			return Entry{}, false, err
-		}
-		if bucket != c.bucket {
-			return Entry{}, false, fmt.Errorf("artifact bucket = %q, want %q", bucket, c.bucket)
 		}
 		objectName = name
 		checksum = artifact.Checksum
@@ -144,6 +144,14 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		return Entry{}, err
 	}
 	checksum := hex.EncodeToString(hash.Sum(nil))
+	var sourceURL string
+	if c.artifacts != nil {
+		var err error
+		sourceURL, err = kodoSourceURL(c.publicDomain, objectName)
+		if err != nil {
+			return Entry{}, err
+		}
+	}
 
 	err = c.uploader.UploadFile(ctx, file.Name(), &uploader.ObjectOptions{
 		BucketName:  c.bucket,
@@ -162,7 +170,7 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		if _, err := c.artifacts.Put(ctx, artifactKey(key), artifact.Artifact{
 			Source: artifact.Source{
 				Type: "kodo",
-				URL:  kodoSourceURL(c.bucket, objectName),
+				URL:  sourceURL,
 			},
 			Type:     "tar.gz",
 			Metadata: entry.Metadata,
@@ -246,23 +254,45 @@ func artifactKey(key Key) artifact.Key {
 	}
 }
 
-func kodoSourceURL(bucket, objectName string) string {
-	return (&url.URL{Scheme: "kodo", Host: bucket, Path: "/" + objectName}).String()
+func normalizePublicDomain(domain string) string {
+	domain = strings.TrimRight(strings.TrimSpace(domain), "/")
+	if domain == "" || strings.Contains(domain, "://") {
+		return domain
+	}
+	return "http://" + domain
 }
 
-func parseKodoSourceURL(raw string) (string, string, error) {
+func kodoSourceURL(domain, objectName string) (string, error) {
+	u, err := url.Parse(normalizePublicDomain(domain))
+	if err != nil {
+		return "", err
+	}
+	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+		return "", fmt.Errorf("kodo public domain must be http(s), got %q", domain)
+	}
+	u.Path = "/" + objectName
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String(), nil
+}
+
+func parseKodoSourceURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	if u.Scheme != "kodo" || u.Host == "" {
-		return "", "", fmt.Errorf("invalid kodo source url %q", raw)
+	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+		return "", fmt.Errorf("invalid kodo source url %q", raw)
 	}
-	objectName := strings.TrimPrefix(u.Path, "/")
+	objectName, err := url.PathUnescape(strings.TrimPrefix(u.EscapedPath(), "/"))
+	if err != nil {
+		return "", err
+	}
 	if objectName == "" {
-		return "", "", fmt.Errorf("invalid kodo source url %q", raw)
+		return "", fmt.Errorf("invalid kodo source url %q", raw)
 	}
-	return u.Host, objectName, nil
+	return objectName, nil
 }
 
 func encodeKodoEntry(entry Entry) (string, error) {

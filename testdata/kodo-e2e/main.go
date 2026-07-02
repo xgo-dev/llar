@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -42,6 +43,7 @@ const (
 	defaultTarget        = "madler/zlib@v1.3.1"
 	defaultSharedTargets = "DaveGamble/cJSON@v1.7.18,pnggroup/libpng@v1.6.47"
 	defaultFormulaRoot   = "testdata/kodo-e2e/formulas"
+	defaultPublicDomain  = "llar.liuxi.ng"
 	kodoEntryMetadataKey = "llar-entry"
 )
 
@@ -51,6 +53,7 @@ func main() {
 	flag.StringVar(&cfg.accessKey, "qiniu-access-key", os.Getenv("QINIU_ACCESS_KEY"), "Qiniu access key")
 	flag.StringVar(&cfg.secretKey, "qiniu-secret-key", os.Getenv("QINIU_SECRET_KEY"), "Qiniu secret key")
 	flag.StringVar(&cfg.bucket, "qiniu-bucket", os.Getenv("QINIU_BUCKET"), "Qiniu Kodo bucket")
+	flag.StringVar(&cfg.publicDomain, "qiniu-public-domain", envOrDefault("QINIU_PUBLIC_DOMAIN", defaultPublicDomain), "Qiniu Kodo public download domain")
 	flag.StringVar(&cfg.prefix, "qiniu-prefix", os.Getenv("QINIU_PREFIX"), "Qiniu Kodo object prefix")
 	flag.StringVar(&cfg.formulaRoot, "formula-root", defaultFormulaRoot, "local formula root")
 	flag.StringVar(&cfg.target, "target", defaultTarget, "target module@version")
@@ -74,6 +77,7 @@ type config struct {
 	accessKey     string
 	secretKey     string
 	bucket        string
+	publicDomain  string
 	prefix        string
 	formulaRoot   string
 	target        string
@@ -87,6 +91,7 @@ func (c *config) validate() error {
 	c.accessKey = strings.TrimSpace(c.accessKey)
 	c.secretKey = strings.TrimSpace(c.secretKey)
 	c.bucket = strings.TrimSpace(c.bucket)
+	c.publicDomain = normalizePublicDomain(c.publicDomain)
 	c.prefix = strings.Trim(strings.TrimSpace(c.prefix), "/")
 	c.matrix = strings.TrimSpace(c.matrix)
 	c.formulaRoot, err = filepath.Abs(c.formulaRoot)
@@ -101,6 +106,9 @@ func (c *config) validate() error {
 	}
 	if c.bucket == "" {
 		return fmt.Errorf("missing required QINIU_BUCKET or -qiniu-bucket")
+	}
+	if _, err := parseHTTPURL(c.publicDomain); err != nil {
+		return fmt.Errorf("-qiniu-public-domain: %w", err)
 	}
 	if c.matrix == "" {
 		return fmt.Errorf("missing required -matrix")
@@ -174,6 +182,7 @@ func run(cfg config) error {
 			accessKey:     cfg.accessKey,
 			secretKey:     cfg.secretKey,
 			bucket:        cfg.bucket,
+			publicDomain:  cfg.publicDomain,
 			prefix:        runPrefix,
 			formulaRoot:   cfg.formulaRoot,
 			target:        target,
@@ -228,6 +237,7 @@ type configData struct {
 	accessKey     string
 	secretKey     string
 	bucket        string
+	publicDomain  string
 	prefix        string
 	formulaRoot   string
 	target        module.Version
@@ -465,6 +475,7 @@ func (s *suite) newCache(workspaceDir string) *countingCache {
 			AccessKey:    s.cfg.accessKey,
 			SecretKey:    s.cfg.secretKey,
 			Bucket:       s.cfg.bucket,
+			PublicDomain: s.cfg.publicDomain,
 			Prefix:       s.cfg.prefix,
 			WorkspaceDir: workspaceDir,
 			Artifacts:    s.artifacts,
@@ -497,16 +508,17 @@ func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, me
 		return artifact.Artifact{}, fmt.Errorf("artifact checksum = %q, want sha256 hex", got.Checksum)
 	}
 
-	bucket, objectName, err := parseKodoSourceURL(got.Source.URL)
+	objectName, err := parseKodoSourceURL(got.Source.URL)
 	if err != nil {
 		return artifact.Artifact{}, err
-	}
-	if bucket != s.cfg.bucket {
-		return artifact.Artifact{}, fmt.Errorf("artifact bucket = %q, want %q", bucket, s.cfg.bucket)
 	}
 	wantObject := objectNameFor(s.cfg.prefix, key)
 	if objectName != wantObject {
 		return artifact.Artifact{}, fmt.Errorf("artifact object = %q, want %q", objectName, wantObject)
+	}
+	wantURL := publicURL(s.cfg.publicDomain, wantObject)
+	if got.Source.URL != wantURL {
+		return artifact.Artifact{}, fmt.Errorf("artifact source url = %q, want %q", got.Source.URL, wantURL)
 	}
 
 	entry, err := s.kodo.entry(ctx, objectName)
@@ -520,6 +532,9 @@ func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, me
 		return artifact.Artifact{}, fmt.Errorf("kodo entry deps = %+v, want %+v", entry.Deps, deps)
 	}
 	if err := s.kodo.assertChecksum(ctx, objectName, got.Checksum); err != nil {
+		return artifact.Artifact{}, err
+	}
+	if err := assertPublicURLChecksum(ctx, got.Source.URL, got.Checksum); err != nil {
 		return artifact.Artifact{}, err
 	}
 	return got, nil
@@ -802,19 +817,47 @@ func objectNameFor(prefix string, key buildcache.Key) string {
 	return strings.Join(parts, "/")
 }
 
-func parseKodoSourceURL(raw string) (string, string, error) {
+func normalizePublicDomain(domain string) string {
+	domain = strings.TrimRight(strings.TrimSpace(domain), "/")
+	if domain == "" || strings.Contains(domain, "://") {
+		return domain
+	}
+	return "http://" + domain
+}
+
+func parseHTTPURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	if u.Scheme != "kodo" || u.Host == "" {
-		return "", "", fmt.Errorf("invalid kodo source url %q", raw)
+	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+		return nil, fmt.Errorf("must be http(s), got %q", raw)
 	}
-	objectName := strings.TrimPrefix(u.Path, "/")
+	return u, nil
+}
+
+func parseKodoSourceURL(raw string) (string, error) {
+	u, err := parseHTTPURL(raw)
+	if err != nil {
+		return "", err
+	}
+	objectName, err := url.PathUnescape(strings.TrimPrefix(u.EscapedPath(), "/"))
+	if err != nil {
+		return "", err
+	}
 	if objectName == "" {
-		return "", "", fmt.Errorf("invalid kodo source url %q", raw)
+		return "", fmt.Errorf("invalid kodo source url %q", raw)
 	}
-	return u.Host, objectName, nil
+	return objectName, nil
+}
+
+func publicURL(domain, objectName string) string {
+	u, _ := parseHTTPURL(domain)
+	u.Path = "/" + objectName
+	u.RawPath = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 func assertZlibOutput(dir string) error {
@@ -845,6 +888,30 @@ func fileSHA256(name string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func assertPublicURLChecksum(ctx context.Context, rawURL, checksum string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s: %s", rawURL, resp.Status)
+	}
+	hash := sha256.New()
+	if _, err := io.Copy(hash, resp.Body); err != nil {
+		return err
+	}
+	got := hex.EncodeToString(hash.Sum(nil))
+	if got != checksum {
+		return fmt.Errorf("GET %s checksum = %s, want %s", rawURL, got, checksum)
+	}
+	return nil
 }
 
 func mustTempDir(pattern string) string {
