@@ -8,11 +8,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
@@ -301,10 +303,12 @@ func setupTestStore(t *testing.T) repo.Store {
 // setupBuilder creates a Builder wired with a test Store and mock source repos.
 func setupBuilder(t *testing.T, store repo.Store, matrix string) *Builder {
 	t.Helper()
+	workspaceDir := t.TempDir()
 	return &Builder{
 		store:        store,
 		matrix:       matrix,
-		workspaceDir: t.TempDir(),
+		workspaceDir: workspaceDir,
+		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
 			modPath := strings.TrimPrefix(repoPath, "github.com/")
 			return newMockRepo(filepath.Join(testSourceDir, modPath)), nil
@@ -337,6 +341,34 @@ func findResult(results []Result, b *Builder, mods []*modules.Module, path strin
 		}
 	}
 	return Result{}, false
+}
+
+type cachePut struct {
+	key    cache.Key
+	output fs.FS
+	entry  cache.Entry
+}
+
+type recordingCache struct {
+	hits map[module.Version]cache.Entry
+	puts []cachePut
+}
+
+func (c *recordingCache) Get(ctx context.Context, key cache.Key) (cache.Entry, bool, error) {
+	if c.hits == nil {
+		return cache.Entry{}, false, nil
+	}
+	entry, ok := c.hits[key.Module]
+	return entry, ok, nil
+}
+
+func (c *recordingCache) Put(ctx context.Context, key cache.Key, output fs.FS, entry cache.Entry) (cache.Entry, error) {
+	c.puts = append(c.puts, cachePut{
+		key:    key,
+		output: output,
+		entry:  entry,
+	})
+	return entry, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +576,71 @@ func TestBuild_CacheAccumulatesMultipleVersions(t *testing.T) {
 	}
 	if _, ok := cache.get("2.0.0", "amd64-linux"); !ok {
 		t.Error("cache miss for 2.0.0")
+	}
+}
+
+func TestBuild_CustomCacheReceivesBuiltArtifacts(t *testing.T) {
+	store := setupTestStore(t)
+	c := &recordingCache{}
+	b := setupBuilder(t, store, "amd64-linux")
+	b.cache = c
+
+	main := module.Version{Path: "test/depresult", Version: "1.0.0"}
+	results, mods := loadAndBuild(t, b, store, main)
+
+	if len(results) != 2 {
+		t.Fatalf("results len = %d, want 2", len(results))
+	}
+	if len(c.puts) != 2 {
+		t.Fatalf("cache puts len = %d, want 2", len(c.puts))
+	}
+	liba := module.Version{Path: "test/liba", Version: "1.0.0"}
+	if c.puts[0].key.Module != liba {
+		t.Fatalf("cache puts[0] module = %+v, want %+v", c.puts[0].key.Module, liba)
+	}
+	if c.puts[0].entry.Metadata != "-lA" {
+		t.Fatalf("cache puts[0] metadata = %q, want -lA", c.puts[0].entry.Metadata)
+	}
+	if c.puts[0].entry.Deps != nil {
+		t.Fatalf("cache puts[0] deps = %+v, want nil", c.puts[0].entry.Deps)
+	}
+	if _, err := fs.Stat(c.puts[0].output, "."); err != nil {
+		t.Fatalf("cache puts[0] output is not readable: %v", err)
+	}
+	depresult := module.Version{Path: "test/depresult", Version: "1.0.0"}
+	if c.puts[1].key.Module != depresult {
+		t.Fatalf("cache puts[1] module = %+v, want %+v", c.puts[1].key.Module, depresult)
+	}
+	wantDeps := []module.Version{liba}
+	if !slices.Equal(c.puts[1].entry.Deps, wantDeps) {
+		t.Fatalf("cache puts[1] deps = %+v, want %+v", c.puts[1].entry.Deps, wantDeps)
+	}
+	if _, ok := findResult(results, b, mods, "test/depresult"); !ok {
+		t.Fatal("missing result for test/depresult")
+	}
+}
+
+func TestBuild_CustomCacheHitSkipsOnBuild(t *testing.T) {
+	store := setupTestStore(t)
+	c := &recordingCache{
+		hits: map[module.Version]cache.Entry{
+			{Path: "test/liba", Version: "1.0.0"}: {Metadata: "-lCUSTOM"},
+		},
+	}
+	b := setupBuilder(t, store, "amd64-linux")
+	b.cache = c
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	results, _ := loadAndBuild(t, b, store, main)
+
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	if results[0].Metadata != "-lCUSTOM" {
+		t.Fatalf("metadata = %q, want -lCUSTOM", results[0].Metadata)
+	}
+	if len(c.puts) != 0 {
+		t.Fatalf("cache puts len = %d, want 0", len(c.puts))
 	}
 }
 
