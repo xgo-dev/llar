@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -339,6 +340,34 @@ func findResult(results []Result, b *Builder, mods []*modules.Module, path strin
 	return Result{}, false
 }
 
+type cachePut struct {
+	key       CacheKey
+	outputDir string
+	entry     CacheEntry
+}
+
+type recordingCache struct {
+	hits map[module.Version]CacheEntry
+	puts []cachePut
+}
+
+func (c *recordingCache) Get(ctx context.Context, key CacheKey, outputDir string) (CacheEntry, bool, error) {
+	if c.hits == nil {
+		return CacheEntry{}, false, nil
+	}
+	entry, ok := c.hits[key.Module]
+	return entry, ok, nil
+}
+
+func (c *recordingCache) Put(ctx context.Context, key CacheKey, outputDir string, entry CacheEntry) (CacheEntry, error) {
+	c.puts = append(c.puts, cachePut{
+		key:       key,
+		outputDir: outputDir,
+		entry:     entry,
+	})
+	return entry, nil
+}
+
 // ---------------------------------------------------------------------------
 // NewBuilder tests
 // ---------------------------------------------------------------------------
@@ -544,6 +573,72 @@ func TestBuild_CacheAccumulatesMultipleVersions(t *testing.T) {
 	}
 	if _, ok := cache.get("2.0.0", "amd64-linux"); !ok {
 		t.Error("cache miss for 2.0.0")
+	}
+}
+
+func TestBuild_CustomCacheReceivesBuiltArtifacts(t *testing.T) {
+	store := setupTestStore(t)
+	cache := &recordingCache{}
+	b := setupBuilder(t, store, "amd64-linux")
+	b.cache = cache
+
+	main := module.Version{Path: "test/depresult", Version: "1.0.0"}
+	results, _ := loadAndBuild(t, b, store, main)
+
+	if len(results) != 2 {
+		t.Fatalf("results len = %d, want 2", len(results))
+	}
+	if results[0].Module != (module.Version{Path: "test/liba", Version: "1.0.0"}) {
+		t.Fatalf("results[0].Module = %+v, want test/liba@1.0.0", results[0].Module)
+	}
+	if results[1].Module != (module.Version{Path: "test/depresult", Version: "1.0.0"}) {
+		t.Fatalf("results[1].Module = %+v, want test/depresult@1.0.0", results[1].Module)
+	}
+	if len(cache.puts) != 2 {
+		t.Fatalf("cache puts = %d, want 2", len(cache.puts))
+	}
+	if cache.puts[0].key.Module != (module.Version{Path: "test/liba", Version: "1.0.0"}) {
+		t.Fatalf("cache puts[0] key = %+v, want test/liba@1.0.0", cache.puts[0].key)
+	}
+	if cache.puts[0].entry.Metadata != "-lA" {
+		t.Fatalf("cache puts[0] metadata = %q, want -lA", cache.puts[0].entry.Metadata)
+	}
+	if len(cache.puts[0].entry.Deps) != 0 {
+		t.Fatalf("cache puts[0] deps = %+v, want empty", cache.puts[0].entry.Deps)
+	}
+	if cache.puts[1].key.Module != (module.Version{Path: "test/depresult", Version: "1.0.0"}) {
+		t.Fatalf("cache puts[1] key = %+v, want test/depresult@1.0.0", cache.puts[1].key)
+	}
+	if cache.puts[1].entry.Metadata != "-lA -lDR" {
+		t.Fatalf("cache puts[1] metadata = %q, want -lA -lDR", cache.puts[1].entry.Metadata)
+	}
+	wantDeps := []module.Version{{Path: "test/liba", Version: "1.0.0"}}
+	if !slices.Equal(cache.puts[1].entry.Deps, wantDeps) {
+		t.Fatalf("cache puts[1] deps = %+v, want %+v", cache.puts[1].entry.Deps, wantDeps)
+	}
+}
+
+func TestBuild_CustomCacheHitSkipsOnBuild(t *testing.T) {
+	store := setupTestStore(t)
+	cache := &recordingCache{
+		hits: map[module.Version]CacheEntry{
+			{Path: "test/liba", Version: "1.0.0"}: {Metadata: "-lCUSTOM"},
+		},
+	}
+	b := setupBuilder(t, store, "amd64-linux")
+	b.cache = cache
+
+	main := module.Version{Path: "test/liba", Version: "1.0.0"}
+	results, _ := loadAndBuild(t, b, store, main)
+
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	if results[0].Metadata != "-lCUSTOM" {
+		t.Fatalf("metadata = %q, want -lCUSTOM", results[0].Metadata)
+	}
+	if len(cache.puts) != 0 {
+		t.Fatalf("cache puts = %d, want 0", len(cache.puts))
 	}
 }
 

@@ -1,0 +1,65 @@
+name: GHCR Package Seed
+
+run-name: ghcr-seed-${{ inputs.package }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: GHCR package name to create when it does not exist.
+        required: true
+        type: string
+      tag:
+        description: Seed image tag.
+        required: false
+        default: llar-seed
+        type: string
+      source_url:
+        description: Repository URL for org.opencontainers.image.source.
+        required: false
+        type: string
+
+concurrency:
+  group: ghcr-package-seed-${{ github.repository_owner }}-${{ inputs.package }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Check package
+        id: seed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_NAME: ${{ inputs.package }}
+          SOURCE_URL: ${{ inputs.source_url }}
+        run: bash .github/scripts/check-ghcr-package.sh
+
+      - name: Log in to GHCR
+        if: steps.seed.outputs.exists == 'false'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Set up Docker Buildx
+        if: steps.seed.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        if: steps.seed.outputs.exists == 'false'
+        uses: docker/build-push-action@v7
+        with:
+          context: .github/ghcr-seed
+          push: true
+          tags: ${{ steps.seed.outputs.image }}:${{ inputs.tag }}
+          build-args: |
+            SOURCE_URL=${{ steps.seed.outputs.source_url }}

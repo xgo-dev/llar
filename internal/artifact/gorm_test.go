@@ -131,6 +131,81 @@ func TestGormStorePutReturnsCanonicalArtifactWithoutSelect(t *testing.T) {
 	}
 }
 
+func TestGormStorePutCreatesPlaceholderAndNextPutStoresArtifact(t *testing.T) {
+	store, _ := newTestGormStore(t)
+
+	ctx := context.Background()
+	key := Key{Module: "madler/zlib", Version: "v1.3.1", MatrixStr: "amd64-linux"}
+	want := Artifact{
+		Source:   Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:abc"},
+		Type:     "tar.gz",
+		Metadata: "-lz",
+		Checksum: "abc",
+	}
+
+	placeholder, err := store.Put(ctx, key, Artifact{})
+	if err != nil {
+		t.Fatalf("Put placeholder: %v", err)
+	}
+	if placeholder != (Artifact{}) {
+		t.Fatalf("Put placeholder = %+v, want empty artifact", placeholder)
+	}
+	if got, ok, err := store.Get(ctx, key); err != nil {
+		t.Fatalf("Get placeholder: %v", err)
+	} else if ok {
+		t.Fatalf("Get placeholder ok = true, artifact = %+v", got)
+	}
+
+	got, err := store.Put(ctx, key, want)
+	if err != nil {
+		t.Fatalf("Put artifact: %v", err)
+	}
+	if got != want {
+		t.Fatalf("Put artifact = %+v, want %+v", got, want)
+	}
+
+	stored, ok, err := store.Get(ctx, key)
+	if err != nil {
+		t.Fatalf("Get after Put artifact: %v", err)
+	}
+	if !ok {
+		t.Fatal("Get after Put artifact ok = false")
+	}
+	if stored != want {
+		t.Fatalf("Get after Put artifact = %+v, want %+v", stored, want)
+	}
+}
+
+func TestGormStorePutReturnsExistingArtifactOverNewArtifact(t *testing.T) {
+	store, _ := newTestGormStore(t)
+
+	ctx := context.Background()
+	key := Key{Module: "madler/zlib", Version: "v1.3.1", MatrixStr: "amd64-linux"}
+	existing := Artifact{
+		Source:   Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:existing"},
+		Type:     "tar.gz",
+		Metadata: "-lz",
+		Checksum: "existing",
+	}
+	if _, err := store.Put(ctx, key, existing); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	newArtifact := Artifact{
+		Source:   Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:new"},
+		Type:     "tar.gz",
+		Metadata: "-lz-new",
+		Checksum: "new",
+	}
+	got, err := store.Put(ctx, key, newArtifact)
+	if err != nil {
+		t.Fatalf("Put new artifact: %v", err)
+	}
+	if got != existing {
+		t.Fatalf("Put new artifact = %+v, want %+v", got, existing)
+	}
+}
+
 func TestGormStoreDelete(t *testing.T) {
 	store, _ := newTestGormStore(t)
 

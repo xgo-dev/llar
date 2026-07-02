@@ -1,0 +1,7 @@
+id "madler/zlib"
+
+fromVer "v1.3.1"
+
+onBuild (ctx, proj, out) => {
+	out.setMetadata "-lz"
+}

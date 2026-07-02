@@ -61,10 +61,12 @@ func (s *GormStore) Put(ctx context.Context, key Key, artifact Artifact) (Artifa
 			{Name: "matrix_str"},
 		},
 		DoUpdates: clause.Set{
-			{
-				Column: clause.Column{Name: "source_type"},
-				Value:  clause.Column{Table: clause.CurrentTable, Name: "source_type"},
-			},
+			{Column: clause.Column{Name: "source_type"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.source_type ELSE source_type END")},
+			{Column: clause.Column{Name: "source_url"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.source_url ELSE source_url END")},
+			{Column: clause.Column{Name: "type"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.type ELSE type END")},
+			{Column: clause.Column{Name: "metadata"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.metadata ELSE metadata END")},
+			{Column: clause.Column{Name: "checksum"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.checksum ELSE checksum END")},
+			{Column: clause.Column{Name: "created_at"}, Value: gorm.Expr("CASE WHEN source_url = '' THEN excluded.created_at ELSE created_at END")},
 		},
 	}, clause.Returning{}).Create(&record).Error
 	if err != nil {
@@ -93,6 +95,9 @@ func (s *GormStore) get(ctx context.Context, key Key) (Artifact, bool, error) {
 	}
 	if err != nil {
 		return Artifact{}, false, fmt.Errorf("get artifact: %w", err)
+	}
+	if record.SourceURL == "" {
+		return Artifact{}, false, nil
 	}
 	return record.artifact(), true, nil
 }

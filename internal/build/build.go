@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula/repo"
@@ -22,10 +21,12 @@ type Builder struct {
 	matrix       string
 	runTest      bool
 	workspaceDir string
+	cache        Cache
 	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
 type Result struct {
+	Module    module.Version
 	Metadata  string
 	OutputDir string
 }
@@ -42,6 +43,7 @@ type Options struct {
 	// their OnTest hooks triggered.
 	RunTest      bool
 	WorkspaceDir string
+	Cache        Cache
 }
 
 func defaultWorkspaceDir() (string, error) {
@@ -67,11 +69,16 @@ func NewBuilder(opts Options) (*Builder, error) {
 			return nil, err
 		}
 	}
+	cache := opts.Cache
+	if cache == nil {
+		cache = &localCache{workspaceDir: workspaceDir}
+	}
 	return &Builder{
 		store:        opts.Store,
 		matrix:       opts.MatrixStr,
 		runTest:      opts.RunTest,
 		workspaceDir: workspaceDir,
+		cache:        cache,
 		newRepo:      vcs.NewRepo,
 	}, nil
 }
@@ -189,6 +196,10 @@ func (b *Builder) resolveModTransitiveDeps(targets []*modules.Module, mod *modul
 
 func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Result, error) {
 	builtResults := make(map[module.Version]classfile.BuildResult)
+	cache := b.cache
+	if cache == nil {
+		cache = &localCache{workspaceDir: b.workspaceDir}
+	}
 
 	// Identify the root target. By MVS convention (see constructBuildList
 	// and modules.Load), targets[0] is the main module requested by the
@@ -206,6 +217,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	}
 
 	build := func(mod *modules.Module) (Result, error) {
+		modVer := module.Version{Path: mod.Path, Version: mod.Version}
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
 		testThisMod := b.runTest && isRoot && mod.OnTest != nil
 
@@ -215,25 +227,21 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer unlock()
 
-		// Consult the build cache. A hit means we already have the
-		// module's build metadata and its installDir is populated from a
-		// previous successful build.
-		cache, err := b.loadCache(mod.Path)
+		installDir, err := b.installDir(mod.Path, mod.Version)
 		if err != nil {
-			cache = nil
+			return Result{}, err
 		}
-		var cachedEntry *buildEntry
-		if cache != nil {
-			if entry, ok := cache.get(mod.Version, b.matrix); ok {
-				cachedEntry = entry
-			}
+		deps := b.resolveModTransitiveDeps(targets, mod)
+
+		entry, cacheHit, err := cache.Get(ctx, CacheKey{Module: modVer, Matrix: b.matrix}, installDir)
+		if err != nil {
+			return Result{}, err
 		}
 
 		// Fast path: cache hit and no OnTest to run. Skip source clone
 		// and OnBuild entirely.
-		if cachedEntry != nil && !testThisMod {
-			dir, _ := b.installDir(mod.Path, mod.Version)
-			return Result{Metadata: cachedEntry.Metadata, OutputDir: dir}, nil
+		if cacheHit && !testThisMod {
+			return Result{Module: modVer, Metadata: entry.Metadata, OutputDir: installDir}, nil
 		}
 
 		// At this point we need to run OnBuild, OnTest, or both. All of
@@ -258,10 +266,6 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			return Result{}, err
 		}
 
-		installDir, err := b.installDir(mod.Path, mod.Version)
-		if err != nil {
-			return Result{}, err
-		}
 		if err := os.MkdirAll(installDir, 0o755); err != nil {
 			return Result{}, err
 		}
@@ -276,7 +280,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			buildContext.AddBuildResult(modVer, result)
 		}
 
-		project := &classfile.Project{Deps: b.resolveModTransitiveDeps(targets, mod), SourceFS: mod.FS.(fs.ReadFileFS)}
+		project := &classfile.Project{Deps: deps, SourceFS: mod.FS.(fs.ReadFileFS)}
 
 		// Ready! Go!
 		if err := os.Chdir(tmpSourceDir); err != nil {
@@ -285,8 +289,8 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 		// Run OnBuild only on cache miss; reuse cached metadata otherwise.
 		var metadata string
-		if cachedEntry != nil {
-			metadata = cachedEntry.Metadata
+		if cacheHit {
+			metadata = entry.Metadata
 		} else {
 			var out classfile.BuildResult
 			mod.OnBuild(buildContext, project, &out)
@@ -309,20 +313,18 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 		// Save cache only on cache miss. A cache hit means the entry is
 		// already present and current; OnTest does not modify metadata.
-		if cachedEntry == nil {
-			if cache == nil {
-				cache = &buildCache{}
-			}
-			cache.set(mod.Version, b.matrix, &buildEntry{
-				Metadata:  metadata,
-				BuildTime: time.Now(),
+		if !cacheHit {
+			entry, err := cache.Put(ctx, CacheKey{Module: modVer, Matrix: b.matrix}, installDir, CacheEntry{
+				Metadata: metadata,
+				Deps:     deps,
 			})
-			if err := b.saveCache(mod.Path, cache); err != nil {
+			if err != nil {
 				return Result{}, err
 			}
+			metadata = entry.Metadata
 		}
 
-		return Result{Metadata: metadata, OutputDir: installDir}, nil
+		return Result{Module: modVer, Metadata: metadata, OutputDir: installDir}, nil
 	}
 
 	var results []Result
@@ -346,13 +348,11 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			return nil, err
 		}
 
-		// Track result for downstream dependencies
-		modVer := module.Version{Path: target.Path, Version: target.Version}
 		br := classfile.BuildResult{}
 		if result.Metadata != "" {
 			br.SetMetadata(result.Metadata)
 		}
-		builtResults[modVer] = br
+		builtResults[result.Module] = br
 
 		results = append(results, result)
 	}
