@@ -110,11 +110,11 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 }
 
 func (c *kodoCache) objectName(key Key) string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if c.prefix != "" {
 		parts = append(parts, c.prefix)
 	}
-	parts = append(parts, strings.Trim(key.Module.Path, "/"), key.Matrix+".tar.gz")
+	parts = append(parts, strings.Trim(key.Module.Path, "/"), strings.Trim(key.Module.Version, "/"), key.Matrix+".tar.gz")
 	return strings.Join(parts, "/")
 }
 
