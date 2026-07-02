@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	classfile "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
@@ -22,6 +22,7 @@ type Builder struct {
 	matrix       string
 	runTest      bool
 	workspaceDir string
+	cache        cache.Cache
 	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
@@ -42,6 +43,7 @@ type Options struct {
 	// their OnTest hooks triggered.
 	RunTest      bool
 	WorkspaceDir string
+	Cache        cache.Cache
 }
 
 func defaultWorkspaceDir() (string, error) {
@@ -67,11 +69,16 @@ func NewBuilder(opts Options) (*Builder, error) {
 			return nil, err
 		}
 	}
+	c := opts.Cache
+	if c == nil {
+		c = &localCache{workspaceDir: workspaceDir}
+	}
 	return &Builder{
 		store:        opts.Store,
 		matrix:       opts.MatrixStr,
 		runTest:      opts.RunTest,
 		workspaceDir: workspaceDir,
+		cache:        c,
 		newRepo:      vcs.NewRepo,
 	}, nil
 }
@@ -215,25 +222,25 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer unlock()
 
+		installDir, err := b.installDir(mod.Path, mod.Version)
+		if err != nil {
+			return Result{}, err
+		}
+		deps := b.resolveModTransitiveDeps(targets, mod)
+		modVer := module.Version{Path: mod.Path, Version: mod.Version}
+
 		// Consult the build cache. A hit means we already have the
 		// module's build metadata and its installDir is populated from a
 		// previous successful build.
-		cache, err := b.loadCache(mod.Path)
+		entry, cacheHit, err := b.cache.Get(ctx, cache.Key{Module: modVer, Matrix: b.matrix})
 		if err != nil {
-			cache = nil
-		}
-		var cachedEntry *buildEntry
-		if cache != nil {
-			if entry, ok := cache.get(mod.Version, b.matrix); ok {
-				cachedEntry = entry
-			}
+			return Result{}, err
 		}
 
 		// Fast path: cache hit and no OnTest to run. Skip source clone
 		// and OnBuild entirely.
-		if cachedEntry != nil && !testThisMod {
-			dir, _ := b.installDir(mod.Path, mod.Version)
-			return Result{Metadata: cachedEntry.Metadata, OutputDir: dir}, nil
+		if cacheHit && !testThisMod {
+			return Result{Metadata: entry.Metadata, OutputDir: installDir}, nil
 		}
 
 		// At this point we need to run OnBuild, OnTest, or both. All of
@@ -258,10 +265,6 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			return Result{}, err
 		}
 
-		installDir, err := b.installDir(mod.Path, mod.Version)
-		if err != nil {
-			return Result{}, err
-		}
 		if err := os.MkdirAll(installDir, 0o755); err != nil {
 			return Result{}, err
 		}
@@ -276,7 +279,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			buildContext.AddBuildResult(modVer, result)
 		}
 
-		project := &classfile.Project{Deps: b.resolveModTransitiveDeps(targets, mod), SourceFS: mod.FS.(fs.ReadFileFS)}
+		project := &classfile.Project{Deps: deps, SourceFS: mod.FS.(fs.ReadFileFS)}
 
 		// Ready! Go!
 		if err := os.Chdir(tmpSourceDir); err != nil {
@@ -285,8 +288,8 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 		// Run OnBuild only on cache miss; reuse cached metadata otherwise.
 		var metadata string
-		if cachedEntry != nil {
-			metadata = cachedEntry.Metadata
+		if cacheHit {
+			metadata = entry.Metadata
 		} else {
 			var out classfile.BuildResult
 			mod.OnBuild(buildContext, project, &out)
@@ -309,17 +312,15 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 		// Save cache only on cache miss. A cache hit means the entry is
 		// already present and current; OnTest does not modify metadata.
-		if cachedEntry == nil {
-			if cache == nil {
-				cache = &buildCache{}
-			}
-			cache.set(mod.Version, b.matrix, &buildEntry{
-				Metadata:  metadata,
-				BuildTime: time.Now(),
+		if !cacheHit {
+			entry, err := b.cache.Put(ctx, cache.Key{Module: modVer, Matrix: b.matrix}, os.DirFS(installDir), cache.Entry{
+				Metadata: metadata,
+				Deps:     deps,
 			})
-			if err := b.saveCache(mod.Path, cache); err != nil {
+			if err != nil {
 				return Result{}, err
 			}
+			metadata = entry.Metadata
 		}
 
 		return Result{Metadata: metadata, OutputDir: installDir}, nil

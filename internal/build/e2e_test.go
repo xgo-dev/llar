@@ -116,6 +116,7 @@ func TestE2E_MatrixVariation(t *testing.T) {
 	for _, matrix := range matrices {
 		b := setupBuilder(t, store, matrix)
 		b.workspaceDir = wsDir // shared workspace
+		b.cache = &localCache{workspaceDir: wsDir}
 
 		main := module.Version{Path: "test/ctxcheck", Version: "1.0.0"}
 		results, _ := loadAndBuild(t, b, store, main)
@@ -302,11 +303,13 @@ func TestE2E_RealZlibBuild(t *testing.T) {
 
 	store := setupTestStore(t)
 	matrix := runtime.GOARCH + "-" + runtime.GOOS
+	workspaceDir := t.TempDir()
 
 	b := &Builder{
 		store:        store,
 		matrix:       matrix,
-		workspaceDir: t.TempDir(),
+		workspaceDir: workspaceDir,
+		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
 			return vcs.NewRepo(repoPath)
 		},
@@ -374,11 +377,13 @@ func TestE2E_RealLibpngBuild(t *testing.T) {
 
 	store := setupTestStore(t)
 	matrix := runtime.GOARCH + "-" + runtime.GOOS
+	workspaceDir := t.TempDir()
 
 	b := &Builder{
 		store:        store,
 		matrix:       matrix,
-		workspaceDir: t.TempDir(),
+		workspaceDir: workspaceDir,
+		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
 			return vcs.NewRepo(repoPath)
 		},
@@ -470,11 +475,13 @@ func TestE2E_RealFreetypeBuild(t *testing.T) {
 
 	store := setupTestStore(t)
 	matrix := runtime.GOARCH + "-" + runtime.GOOS
+	workspaceDir := t.TempDir()
 
 	b := &Builder{
 		store:        store,
 		matrix:       matrix,
-		workspaceDir: t.TempDir(),
+		workspaceDir: workspaceDir,
+		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
 			return vcs.NewRepo(repoPath)
 		},
@@ -650,6 +657,7 @@ func TestE2E_OnTest_RealCMakeBuild_ReusesCacheOnTestRerun(t *testing.T) {
 	// Phase 1: populate cache with a plain (non-test) build.
 	b1 := setupBuilder(t, store, "amd64-linux")
 	b1.workspaceDir = wsDir
+	b1.cache = &localCache{workspaceDir: wsDir}
 	results1, _ := loadAndBuild(t, b1, store, main)
 	if results1[0].Metadata != "-lcmtadd" {
 		t.Fatalf("phase1 metadata = %q, want %q", results1[0].Metadata, "-lcmtadd")
@@ -673,6 +681,7 @@ func TestE2E_OnTest_RealCMakeBuild_ReusesCacheOnTestRerun(t *testing.T) {
 	// against the cached artifacts and writes the stamp.
 	b2 := setupBuilder(t, store, "amd64-linux")
 	b2.workspaceDir = wsDir
+	b2.cache = &localCache{workspaceDir: wsDir}
 	b2.runTest = true
 	results2, _ := loadAndBuild(t, b2, store, main)
 
