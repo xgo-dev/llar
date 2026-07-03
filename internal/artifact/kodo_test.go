@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -102,12 +103,9 @@ func TestKodoArtifactGetPutDeleteWithFakeKodo(t *testing.T) {
 		t.Fatalf("Put = %+v, want %+v", got, want)
 	}
 
-	got, ok, err := store.Get(context.Background(), key)
+	got, err = store.Get(context.Background(), key)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
-	}
-	if !ok {
-		t.Fatal("Get missed object")
 	}
 	if got != want {
 		t.Fatalf("Get = %+v, want %+v", got, want)
@@ -126,12 +124,8 @@ func TestKodoArtifactGetErrors(t *testing.T) {
 		defer server.Close()
 		store := newFakeKodoArtifactStore(server.URL, "bucket", "")
 
-		got, ok, err := store.Get(context.Background(), key)
-		if err != nil {
-			t.Fatalf("Get: %v", err)
-		}
-		if ok {
-			t.Fatalf("Get = %+v, true; want miss", got)
+		if got, err := store.Get(context.Background(), key); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Get = %+v, %v; want ErrNotFound", got, err)
 		}
 	})
 
@@ -141,8 +135,8 @@ func TestKodoArtifactGetErrors(t *testing.T) {
 		defer server.Close()
 		store := newFakeKodoArtifactStore(server.URL, "bucket", "")
 
-		if got, ok, err := store.Get(context.Background(), key); err == nil {
-			t.Fatalf("Get = %+v, %v, nil; want metadata error", got, ok)
+		if got, err := store.Get(context.Background(), key); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Get = %+v, %v; want ErrNotFound", got, err)
 		}
 	})
 }
@@ -235,12 +229,9 @@ func TestKodoArtifactE2E(t *testing.T) {
 		t.Fatalf("Put = %+v, want %+v", got, want)
 	}
 
-	got, ok, err := store.Get(ctx, key)
+	got, err = store.Get(ctx, key)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
-	}
-	if !ok {
-		t.Fatal("Get missed uploaded object")
 	}
 	if got != want {
 		t.Fatalf("Get = %+v, want %+v", got, want)

@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	qiniuclient "github.com/qiniu/go-sdk/v7/client"
@@ -43,20 +42,20 @@ func NewKodoArtifact(cfg KodoArtifactConfig) Store {
 	}
 }
 
-func (s *kodoArtifact) Get(ctx context.Context, key Key) (Artifact, bool, error) {
+func (s *kodoArtifact) Get(ctx context.Context, key Key) (Artifact, error) {
 	objectName := s.objectName(key)
 	object, err := s.objects.Bucket(s.bucket).Object(objectName).Stat().Call(ctx)
 	if err != nil {
 		if kodoArtifactObjectNotFound(err) {
-			return Artifact{}, false, nil
+			return Artifact{}, ErrNotFound
 		}
-		return Artifact{}, false, err
+		return Artifact{}, err
 	}
 	got, ok := kodoArtifactFromMetadata(object.Metadata)
 	if !ok {
-		return Artifact{}, false, fmt.Errorf("read kodo artifact metadata for %s", objectName)
+		return Artifact{}, ErrNotFound
 	}
-	return got, true, nil
+	return got, nil
 }
 
 func (s *kodoArtifact) Put(ctx context.Context, key Key, art Artifact) (Artifact, error) {

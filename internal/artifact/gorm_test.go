@@ -3,6 +3,7 @@ package artifact
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -25,12 +26,8 @@ func TestGormStoreGetMissAndPut(t *testing.T) {
 		Checksum: "abc",
 	}
 
-	got, ok, err := store.Get(ctx, key)
-	if err != nil {
-		t.Fatalf("Get miss: %v", err)
-	}
-	if ok {
-		t.Fatalf("Get miss ok = true, artifact = %+v", got)
+	if got, err := store.Get(ctx, key); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get miss = %+v, %v; want ErrNotFound", got, err)
 	}
 
 	inserted, err := store.Put(ctx, key, want)
@@ -41,12 +38,9 @@ func TestGormStoreGetMissAndPut(t *testing.T) {
 		t.Fatalf("Put = %+v, want %+v", inserted, want)
 	}
 
-	got, ok, err = store.Get(ctx, key)
+	got, err := store.Get(ctx, key)
 	if err != nil {
 		t.Fatalf("Get hit: %v", err)
-	}
-	if !ok {
-		t.Fatalf("Get hit ok = false")
 	}
 	if got != want {
 		t.Fatalf("Get = %+v, want %+v", got, want)
@@ -149,10 +143,8 @@ func TestGormStoreDelete(t *testing.T) {
 	if err := store.Delete(ctx, key); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if got, ok, err := store.Get(ctx, key); err != nil {
-		t.Fatalf("Get after Delete: %v", err)
-	} else if ok {
-		t.Fatalf("Get after Delete ok = true, artifact = %+v", got)
+	if got, err := store.Get(ctx, key); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get after Delete = %+v, %v; want ErrNotFound", got, err)
 	}
 }
 
@@ -183,7 +175,7 @@ func TestGormStoreDatabaseErrors(t *testing.T) {
 		Metadata: "-lz",
 		Checksum: "abc",
 	}
-	if _, _, err := store.Get(ctx, key); err == nil {
+	if _, err := store.Get(ctx, key); err == nil {
 		t.Fatal("Get with closed database = nil, want error")
 	}
 	if _, err := store.Put(ctx, key, value); err == nil {

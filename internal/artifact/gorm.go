@@ -38,7 +38,7 @@ func NewGormStore(db *gorm.DB) (*GormStore, error) {
 	return &GormStore{db: db}, nil
 }
 
-func (s *GormStore) Get(ctx context.Context, key Key) (Artifact, bool, error) {
+func (s *GormStore) Get(ctx context.Context, key Key) (Artifact, error) {
 	return s.get(ctx, key)
 }
 
@@ -83,18 +83,18 @@ func (s *GormStore) Delete(ctx context.Context, key Key) error {
 	return nil
 }
 
-func (s *GormStore) get(ctx context.Context, key Key) (Artifact, bool, error) {
+func (s *GormStore) get(ctx context.Context, key Key) (Artifact, error) {
 	var record artifactRecord
 	err := s.db.WithContext(ctx).
 		Where("module = ? AND version = ? AND matrix_str = ?", key.Module, key.Version, key.MatrixStr).
 		First(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return Artifact{}, false, nil
+		return Artifact{}, ErrNotFound
 	}
 	if err != nil {
-		return Artifact{}, false, fmt.Errorf("get artifact: %w", err)
+		return Artifact{}, fmt.Errorf("get artifact: %w", err)
 	}
-	return record.artifact(), true, nil
+	return record.artifact(), nil
 }
 
 func (r artifactRecord) artifact() Artifact {
