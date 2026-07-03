@@ -1,6 +1,11 @@
 package artifact
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var ErrNotFound = errors.New("artifact not found")
 
 type Key struct {
 	Module    string
@@ -21,7 +26,7 @@ type Artifact struct {
 }
 
 type Store interface {
-	Get(ctx context.Context, key Key) (Artifact, bool, error)
+	Get(ctx context.Context, key Key) (Artifact, error)
 	Put(ctx context.Context, key Key, artifact Artifact) (Artifact, error)
 	Delete(ctx context.Context, key Key) error
 }
