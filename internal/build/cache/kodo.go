@@ -74,9 +74,6 @@ func NewKodo(cfg KodoConfig) Cache {
 }
 
 func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
-	if c.artifacts == nil {
-		return Entry{}, false, nil
-	}
 	art, err := c.artifacts.Get(ctx, artifact.Key{
 		Module:    key.Module.Path,
 		Version:   key.Module.Version,
@@ -87,9 +84,6 @@ func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
 	}
 	if err != nil {
 		return Entry{}, false, err
-	}
-	if art.Source.Type != "kodo" {
-		return Entry{}, false, fmt.Errorf("artifact source type = %q, want kodo", art.Source.Type)
 	}
 	if c.workspaceDir != "" {
 		objectName := c.objectName(key)
