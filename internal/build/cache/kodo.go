@@ -76,7 +76,11 @@ func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
 	if c.artifacts == nil {
 		return Entry{}, false, nil
 	}
-	art, ok, err := c.artifacts.Get(ctx, artifactKey(key))
+	art, ok, err := c.artifacts.Get(ctx, artifact.Key{
+		Module:    key.Module.Path,
+		Version:   key.Module.Version,
+		MatrixStr: key.Matrix,
+	})
 	if err != nil {
 		return Entry{}, false, err
 	}
@@ -148,7 +152,11 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		return Entry{}, err
 	}
 	if c.artifacts != nil {
-		if _, err := c.artifacts.Put(ctx, artifactKey(key), artifact.Artifact{
+		if _, err := c.artifacts.Put(ctx, artifact.Key{
+			Module:    key.Module.Path,
+			Version:   key.Module.Version,
+			MatrixStr: key.Matrix,
+		}, artifact.Artifact{
 			Source: artifact.Source{
 				Type: "kodo",
 				URL:  sourceURL,
@@ -225,14 +233,6 @@ func (c *kodoCache) restore(ctx context.Context, key Key, objectName, checksum s
 	}
 	defer file.Close()
 	return extractTarGzip(file, installDir)
-}
-
-func artifactKey(key Key) artifact.Key {
-	return artifact.Key{
-		Module:    key.Module.Path,
-		Version:   key.Module.Version,
-		MatrixStr: key.Matrix,
-	}
 }
 
 func normalizePublicDomain(domain string) string {

@@ -106,7 +106,11 @@ func TestKodoE2E_PutGet(t *testing.T) {
 		t.Fatalf("Put entry = %+v, want %+v", got, want)
 	}
 
-	stored, ok, err := store.Get(ctx, artifactKey(key))
+	stored, ok, err := store.Get(ctx, artifact.Key{
+		Module:    key.Module.Path,
+		Version:   key.Module.Version,
+		MatrixStr: key.Matrix,
+	})
 	if err != nil {
 		t.Fatalf("artifact Get after Put failed: %v", err)
 	}
@@ -143,7 +147,11 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	if got.Metadata != want.Metadata {
 		t.Fatalf("conflicting Put entry = %+v, want existing %+v", got, want)
 	}
-	afterConflict, ok, err := store.Get(ctx, artifactKey(key))
+	afterConflict, ok, err := store.Get(ctx, artifact.Key{
+		Module:    key.Module.Path,
+		Version:   key.Module.Version,
+		MatrixStr: key.Matrix,
+	})
 	if err != nil {
 		t.Fatalf("artifact Get after conflicting Put failed: %v", err)
 	}
