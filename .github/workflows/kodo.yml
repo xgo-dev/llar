@@ -40,18 +40,15 @@ jobs:
           QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
           QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
           QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
-          QINIU_PUBLIC_DOMAIN: llar.liuxi.ng
         run: |
           test -n "$QINIU_ACCESS_KEY"
           test -n "$QINIU_SECRET_KEY"
           test -n "$QINIU_BUCKET"
-          test -n "$QINIU_PUBLIC_DOMAIN"
 
       - name: Run Kodo artifact E2E
         env:
           QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
           QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
           QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
-          QINIU_PUBLIC_DOMAIN: llar.liuxi.ng
           QINIU_PREFIX: ${{ secrets.QINIU_PREFIX }}
         run: go test -v -ldflags="-checklinkname=0" ./internal/artifact -run '^TestKodoArtifactE2E$' -count=1
