@@ -5,9 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,8 +27,6 @@ import (
 	"github.com/qiniu/go-sdk/v7/storagev2/uploader"
 	"github.com/qiniu/go-sdk/v7/storagev2/uptoken"
 )
-
-const kodoEntryMetadataKey = "llar-entry"
 
 type KodoConfig struct {
 	AccessKey    string
@@ -77,52 +73,32 @@ func NewKodo(cfg KodoConfig) Cache {
 }
 
 func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
-	objectName := c.objectName(key)
-	var checksum string
-	if c.artifacts != nil {
-		artifact, ok, err := c.artifacts.Get(ctx, artifactKey(key))
-		if err != nil {
-			return Entry{}, false, err
-		}
-		if !ok {
-			return Entry{}, false, nil
-		}
-		if artifact.Source.Type != "kodo" {
-			return Entry{}, false, fmt.Errorf("artifact source type = %q, want kodo", artifact.Source.Type)
-		}
-		name, err := parseKodoSourceURL(artifact.Source.URL)
-		if err != nil {
-			return Entry{}, false, err
-		}
-		objectName = name
-		checksum = artifact.Checksum
+	if c.artifacts == nil {
+		return Entry{}, false, nil
 	}
-
-	object, err := c.objects.Bucket(c.bucket).Object(objectName).Stat().Call(ctx)
+	art, ok, err := c.artifacts.Get(ctx, artifactKey(key))
 	if err != nil {
-		if isKodoObjectNotFound(err) {
-			return Entry{}, false, nil
-		}
 		return Entry{}, false, err
 	}
-	entry, ok := kodoEntryFromMetadata(object.Metadata)
 	if !ok {
-		return Entry{}, false, fmt.Errorf("read kodo entry metadata for %s", objectName)
+		return Entry{}, false, nil
+	}
+	if art.Source.Type != "kodo" {
+		return Entry{}, false, fmt.Errorf("artifact source type = %q, want kodo", art.Source.Type)
+	}
+	objectName, err := parseKodoSourceURL(art.Source.URL)
+	if err != nil {
+		return Entry{}, false, err
 	}
 	if c.workspaceDir != "" {
-		if err := c.restore(ctx, key, objectName, checksum); err != nil {
+		if err := c.restore(ctx, key, objectName, art.Checksum); err != nil {
 			return Entry{}, false, err
 		}
 	}
-	return entry, true, nil
+	return Entry{Metadata: art.Metadata}, true, nil
 }
 
 func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry) (Entry, error) {
-	entryMetadata, err := encodeKodoEntry(entry)
-	if err != nil {
-		return Entry{}, err
-	}
-
 	objectName := c.objectName(key)
 	putPolicy, err := uptoken.NewPutPolicyWithKey(c.bucket, objectName, time.Now().Add(time.Hour))
 	if err != nil {
@@ -160,9 +136,6 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		FileName:    path.Base(objectName),
 		ContentType: "application/gzip",
 		UpToken:     uptoken.NewSigner(putPolicy, c.credentials),
-		Metadata: map[string]string{
-			kodoEntryMetadataKey: entryMetadata,
-		},
 	}, nil)
 	if err != nil {
 		if isKodoObjectExists(err) {
@@ -301,33 +274,6 @@ func parseKodoSourceURL(raw string) (string, error) {
 		return "", fmt.Errorf("invalid kodo source url %q", raw)
 	}
 	return objectName, nil
-}
-
-func encodeKodoEntry(entry Entry) (string, error) {
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(data), nil
-}
-
-func kodoEntryFromMetadata(metadata map[string]string) (Entry, bool) {
-	raw := metadata[kodoEntryMetadataKey]
-	if raw == "" {
-		raw = metadata["x-qn-meta-"+kodoEntryMetadataKey]
-	}
-	if raw == "" {
-		return Entry{}, false
-	}
-	data, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
-		return Entry{}, false
-	}
-	var entry Entry
-	if err := json.Unmarshal(data, &entry); err != nil {
-		return Entry{}, false
-	}
-	return entry, true
 }
 
 func isKodoObjectNotFound(err error) bool {

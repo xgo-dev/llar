@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -98,13 +97,12 @@ func TestKodoE2E_PutGet(t *testing.T) {
 
 	want := Entry{
 		Metadata: metadata,
-		Deps:     []module.Version{{Path: "example/dep", Version: "v1.0.0"}},
 	}
 	got, err := c.Put(ctx, key, os.DirFS(installDir), want)
 	if err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
-	if got.Metadata != want.Metadata || !slices.Equal(got.Deps, want.Deps) {
+	if got.Metadata != want.Metadata {
 		t.Fatalf("Put entry = %+v, want %+v", got, want)
 	}
 
@@ -137,13 +135,12 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	}
 	conflict := Entry{
 		Metadata: "-lz-conflict",
-		Deps:     []module.Version{{Path: "example/other", Version: "v2.0.0"}},
 	}
 	got, err = c.Put(ctx, key, os.DirFS(installDir), conflict)
 	if err != nil {
 		t.Fatalf("conflicting Put failed: %v", err)
 	}
-	if got.Metadata != want.Metadata || !slices.Equal(got.Deps, want.Deps) {
+	if got.Metadata != want.Metadata {
 		t.Fatalf("conflicting Put entry = %+v, want existing %+v", got, want)
 	}
 	afterConflict, ok, err := store.Get(ctx, artifactKey(key))
@@ -170,7 +167,7 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	if !ok {
 		t.Fatal("Get after Put missed")
 	}
-	if got.Metadata != want.Metadata || !slices.Equal(got.Deps, want.Deps) {
+	if got.Metadata != want.Metadata {
 		t.Fatalf("Get entry = %+v, want %+v", got, want)
 	}
 	if _, err := os.Stat(filepath.Join(installDir, "include", "zlib.h")); err != nil {

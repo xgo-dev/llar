@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -44,7 +41,6 @@ const (
 	defaultSharedTargets = "DaveGamble/cJSON@v1.7.18,pnggroup/libpng@v1.6.47"
 	defaultFormulaRoot   = "testdata/kodo-e2e/formulas"
 	defaultPublicDomain  = "llar.liuxi.ng"
-	kodoEntryMetadataKey = "llar-entry"
 )
 
 func main() {
@@ -276,7 +272,7 @@ func (s *suite) coldBuild(ctx context.Context) error {
 		return err
 	}
 	key := cacheKey(s.cfg.target, s.cfg.matrix)
-	art, err := s.assertStoredArtifact(ctx, key, "-lz", nil)
+	art, err := s.assertStoredArtifact(ctx, key, "-lz")
 	if err != nil {
 		return err
 	}
@@ -296,7 +292,7 @@ func (s *suite) repeatedBuild(ctx context.Context) error {
 	if s.baseCache.totalPuts() != 1 {
 		return fmt.Errorf("cache Put calls after cache hit = %d, want 1", s.baseCache.totalPuts())
 	}
-	art, err := s.assertStoredArtifact(ctx, cacheKey(s.cfg.target, s.cfg.matrix), "-lz", nil)
+	art, err := s.assertStoredArtifact(ctx, cacheKey(s.cfg.target, s.cfg.matrix), "-lz")
 	if err != nil {
 		return err
 	}
@@ -339,7 +335,7 @@ func (s *suite) differentMatrix(ctx context.Context) error {
 	if c.totalPuts() != 1 {
 		return fmt.Errorf("cache Put calls = %d, want 1", c.totalPuts())
 	}
-	if _, err := s.assertStoredArtifact(ctx, cacheKey(s.cfg.target, matrix), "-lz", nil); err != nil {
+	if _, err := s.assertStoredArtifact(ctx, cacheKey(s.cfg.target, matrix), "-lz"); err != nil {
 		return err
 	}
 	return nil
@@ -393,7 +389,7 @@ func (s *suite) concurrentDuplicate(ctx context.Context) error {
 	if total := c1.totalPuts() + c2.totalPuts(); total != 2 {
 		return fmt.Errorf("cache Put calls = %d, want 2", total)
 	}
-	if _, err := s.assertStoredArtifact(ctx, key, "-lz", nil); err != nil {
+	if _, err := s.assertStoredArtifact(ctx, key, "-lz"); err != nil {
 		return err
 	}
 	return nil
@@ -434,7 +430,7 @@ func (s *suite) concurrentSharedDependency(ctx context.Context) error {
 	if c.putCount(cacheKey(zlib, matrix)) != 2 {
 		return fmt.Errorf("shared dependency Put calls = %d, want 2", c.putCount(cacheKey(zlib, matrix)))
 	}
-	if _, err := s.assertStoredArtifact(ctx, cacheKey(zlib, matrix), "-lz", nil); err != nil {
+	if _, err := s.assertStoredArtifact(ctx, cacheKey(zlib, matrix), "-lz"); err != nil {
 		return err
 	}
 
@@ -450,7 +446,7 @@ func (s *suite) concurrentSharedDependency(ctx context.Context) error {
 		if got.Metadata != wantMetadata {
 			return fmt.Errorf("%s metadata = %q, want %q", targetKey(target), got.Metadata, wantMetadata)
 		}
-		if _, err := s.assertStoredArtifact(ctx, cacheKey(target, matrix), wantMetadata, []module.Version{zlib}); err != nil {
+		if _, err := s.assertStoredArtifact(ctx, cacheKey(target, matrix), wantMetadata); err != nil {
 			return err
 		}
 	}
@@ -495,7 +491,7 @@ func (s *suite) newCache(workspaceDir string) *countingCache {
 	}
 }
 
-func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, metadata string, deps []module.Version) (artifact.Artifact, error) {
+func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, metadata string) (artifact.Artifact, error) {
 	got, ok, err := s.artifacts.Get(ctx, artifact.Key{
 		Module:    key.Module.Path,
 		Version:   key.Module.Version,
@@ -533,16 +529,6 @@ func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, me
 		return artifact.Artifact{}, fmt.Errorf("artifact source url = %q, want %q", got.Source.URL, wantURL)
 	}
 
-	entry, err := s.kodo.entry(ctx, objectName)
-	if err != nil {
-		return artifact.Artifact{}, err
-	}
-	if entry.Metadata != metadata {
-		return artifact.Artifact{}, fmt.Errorf("kodo entry metadata = %q, want %q", entry.Metadata, metadata)
-	}
-	if !slices.Equal(entry.Deps, deps) {
-		return artifact.Artifact{}, fmt.Errorf("kodo entry deps = %+v, want %+v", entry.Deps, deps)
-	}
 	if err := s.kodo.assertChecksum(ctx, objectName, got.Checksum); err != nil {
 		return artifact.Artifact{}, err
 	}
@@ -633,29 +619,6 @@ func newKodoClient(cfg config) *kodoClient {
 			Options: options,
 		}),
 	}
-}
-
-func (c *kodoClient) entry(ctx context.Context, objectName string) (buildcache.Entry, error) {
-	object, err := c.objects.Bucket(c.bucket).Object(objectName).Stat().Call(ctx)
-	if err != nil {
-		return buildcache.Entry{}, fmt.Errorf("stat kodo object %s: %w", objectName, err)
-	}
-	raw := object.Metadata[kodoEntryMetadataKey]
-	if raw == "" {
-		raw = object.Metadata["x-qn-meta-"+kodoEntryMetadataKey]
-	}
-	if raw == "" {
-		return buildcache.Entry{}, fmt.Errorf("kodo object %s missing %s metadata", objectName, kodoEntryMetadataKey)
-	}
-	data, err := base64.RawURLEncoding.DecodeString(raw)
-	if err != nil {
-		return buildcache.Entry{}, fmt.Errorf("decode kodo entry metadata for %s: %w", objectName, err)
-	}
-	var entry buildcache.Entry
-	if err := json.Unmarshal(data, &entry); err != nil {
-		return buildcache.Entry{}, fmt.Errorf("unmarshal kodo entry metadata for %s: %w", objectName, err)
-	}
-	return entry, nil
 }
 
 func (c *kodoClient) assertChecksum(ctx context.Context, objectName, checksum string) error {
