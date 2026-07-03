@@ -156,6 +156,44 @@ func TestGormStoreDelete(t *testing.T) {
 	}
 }
 
+func TestGormStoreDatabaseErrors(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("gorm.Open: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB: %v", err)
+	}
+	store, err := NewGormStore(db)
+	if err != nil {
+		t.Fatalf("NewGormStore: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("db.Close: %v", err)
+	}
+
+	ctx := context.Background()
+	key := Key{Module: "madler/zlib", Version: "v1.3.1", MatrixStr: "amd64-linux"}
+	value := Artifact{
+		Source:   Source{Type: "ghcr", URL: "https://ghcr.io/v2/meteorsliu/llar/blobs/sha256:abc"},
+		Type:     "tar.gz",
+		Metadata: "-lz",
+		Checksum: "abc",
+	}
+	if _, _, err := store.Get(ctx, key); err == nil {
+		t.Fatal("Get with closed database = nil, want error")
+	}
+	if _, err := store.Put(ctx, key, value); err == nil {
+		t.Fatal("Put with closed database = nil, want error")
+	}
+	if err := store.Delete(ctx, key); err == nil {
+		t.Fatal("Delete with closed database = nil, want error")
+	}
+}
+
 func newTestGormStore(t *testing.T) (*GormStore, *sql.DB) {
 	t.Helper()
 	return newTestGormStoreWithLogger(t, logger.Default.LogMode(logger.Silent))
