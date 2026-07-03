@@ -14,7 +14,10 @@ import (
 	"github.com/qiniu/go-sdk/v7/storagev2/objects"
 )
 
-const kodoArtifactMetadataKey = "llar-artifact"
+const (
+	kodoArtifactContentType = "application/gzip"
+	kodoArtifactMetadataKey = "llar-artifact"
+)
 
 type KodoArtifactConfig struct {
 	AccessKey string
@@ -57,14 +60,17 @@ func (s *kodoArtifact) Get(ctx context.Context, key Key) (Artifact, bool, error)
 }
 
 func (s *kodoArtifact) Put(ctx context.Context, key Key, art Artifact) (Artifact, error) {
-	got, ok, err := s.Get(ctx, key)
+	raw, err := encodeKodoArtifact(art)
 	if err != nil {
 		return art, err
 	}
-	if !ok {
-		return art, fmt.Errorf("kodo artifact object %s missing", s.objectName(key))
+	err = s.objects.Bucket(s.bucket).Object(s.objectName(key)).SetMetadata(kodoArtifactContentType).
+		Metadata(map[string]string{kodoArtifactMetadataKey: raw}).
+		Call(ctx)
+	if err != nil {
+		return art, err
 	}
-	return got, nil
+	return art, nil
 }
 
 func (s *kodoArtifact) Delete(ctx context.Context, key Key) error {

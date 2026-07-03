@@ -89,16 +89,18 @@ func TestKodoArtifactGetPutDeleteWithFakeKodo(t *testing.T) {
 		Metadata: "-lz",
 		Checksum: "abc",
 	}
-	raw, err := encodeKodoArtifact(want)
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
 	objectName := "cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"
-	server := newFakeKodoObjectServer(t, "bucket", objectName, map[string]string{
-		"x-qn-meta-" + kodoArtifactMetadataKey: raw,
-	})
+	server := newFakeKodoObjectServer(t, "bucket", objectName, nil)
 	defer server.Close()
 	store := newFakeKodoArtifactStore(server.URL, "bucket", "cache")
+
+	got, err := store.Put(context.Background(), key, want)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got != want {
+		t.Fatalf("Put = %+v, want %+v", got, want)
+	}
 
 	got, ok, err := store.Get(context.Background(), key)
 	if err != nil {
@@ -109,20 +111,6 @@ func TestKodoArtifactGetPutDeleteWithFakeKodo(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("Get = %+v, want %+v", got, want)
-	}
-
-	conflict := Artifact{
-		Source:   Source{Type: "kodo", URL: "https://example.com/conflict"},
-		Type:     "tar.gz",
-		Metadata: "-lz-conflict",
-		Checksum: "conflict",
-	}
-	got, err = store.Put(context.Background(), key, conflict)
-	if err != nil {
-		t.Fatalf("Put: %v", err)
-	}
-	if got != want {
-		t.Fatalf("Put = %+v, want %+v", got, want)
 	}
 
 	if err := store.Delete(context.Background(), key); err != nil {
@@ -228,7 +216,7 @@ func TestKodoArtifactE2E(t *testing.T) {
 		Metadata: "-lz",
 		Checksum: "sha256-test",
 	}
-	if err := uploadKodoArtifactObject(ctx, t, accessKey, secretKey, bucket, objectName, want); err != nil {
+	if err := uploadKodoArtifactObject(ctx, t, accessKey, secretKey, bucket, objectName); err != nil {
 		t.Fatalf("upload object: %v", err)
 	}
 	t.Cleanup(func() {
@@ -239,6 +227,14 @@ func TestKodoArtifactE2E(t *testing.T) {
 		}
 	})
 
+	got, err := store.Put(ctx, key, want)
+	if err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if got != want {
+		t.Fatalf("Put = %+v, want %+v", got, want)
+	}
+
 	got, ok, err := store.Get(ctx, key)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
@@ -248,20 +244,6 @@ func TestKodoArtifactE2E(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("Get = %+v, want %+v", got, want)
-	}
-
-	conflict := Artifact{
-		Source:   Source{Type: "kodo", URL: "https://example.com/conflict"},
-		Type:     "tar.gz",
-		Metadata: "-lz-conflict",
-		Checksum: "sha256-conflict",
-	}
-	got, err = store.Put(ctx, key, conflict)
-	if err != nil {
-		t.Fatalf("Put conflict: %v", err)
-	}
-	if got != want {
-		t.Fatalf("Put conflict = %+v, want canonical %+v", got, want)
 	}
 }
 
@@ -301,7 +283,23 @@ func newFakeKodoObjectServer(t *testing.T, bucket, objectName string, metadata m
 			_, _ = w.Write(data)
 		case r.Method == http.MethodPost && r.URL.RequestURI() == "/delete/"+entry:
 			w.WriteHeader(http.StatusOK)
-		case strings.HasPrefix(r.URL.Path, "/stat/"), strings.HasPrefix(r.URL.Path, "/delete/"):
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/chgm/"+entry+"/mime/"):
+			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/chgm/"+entry+"/mime/"), "/")
+			if len(parts) < 3 || len(parts)%2 != 1 {
+				t.Fatalf("unexpected chgm path: %s", r.URL.Path)
+			}
+			if metadata == nil {
+				metadata = map[string]string{}
+			}
+			for i := 1; i < len(parts); i += 2 {
+				value, err := base64.URLEncoding.DecodeString(parts[i+1])
+				if err != nil {
+					t.Fatalf("decode metadata value: %v", err)
+				}
+				metadata[parts[i]] = string(value)
+			}
+			w.WriteHeader(http.StatusOK)
+		case strings.HasPrefix(r.URL.Path, "/stat/"), strings.HasPrefix(r.URL.Path, "/delete/"), strings.HasPrefix(r.URL.Path, "/chgm/"):
 			w.WriteHeader(612)
 			_, _ = w.Write([]byte(`{"error":"not found"}`))
 		default:
@@ -310,13 +308,9 @@ func newFakeKodoObjectServer(t *testing.T, bucket, objectName string, metadata m
 	}))
 }
 
-func uploadKodoArtifactObject(ctx context.Context, t *testing.T, accessKey, secretKey, bucket, objectName string, art Artifact) error {
+func uploadKodoArtifactObject(ctx context.Context, t *testing.T, accessKey, secretKey, bucket, objectName string) error {
 	t.Helper()
 
-	raw, err := encodeKodoArtifact(art)
-	if err != nil {
-		return err
-	}
 	file := filepath.Join(t.TempDir(), "tar.gz")
 	if err := os.WriteFile(file, []byte("artifact"), 0o644); err != nil {
 		return err
@@ -335,8 +329,5 @@ func uploadKodoArtifactObject(ctx context.Context, t *testing.T, accessKey, secr
 		FileName:    path.Base(objectName),
 		ContentType: "application/gzip",
 		UpToken:     uptoken.NewSigner(putPolicy, cred),
-		Metadata: map[string]string{
-			kodoArtifactMetadataKey: raw,
-		},
 	}, nil)
 }
