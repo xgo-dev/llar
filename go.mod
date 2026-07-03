@@ -9,6 +9,7 @@ require (
 	github.com/goplus/xgo v1.6.1
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
+	github.com/qiniu/go-sdk/v7 v7.26.14
 	github.com/qiniu/x v1.16.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.32.0
@@ -18,10 +19,14 @@ require (
 )
 
 require (
+	github.com/BurntSushi/toml v1.3.2 // indirect
+	github.com/alex-ant/gomath v0.0.0-20160516115720-89013a210a82 // indirect
 	github.com/containerd/stargz-snapshotter/estargz v0.18.1 // indirect
 	github.com/docker/cli v29.0.3+incompatible // indirect
 	github.com/docker/distribution v2.8.3+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
+	github.com/gammazero/toposort v0.1.1 // indirect
+	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/gopherjs/gopherjs v0.0.0-20200217142428-fce0ec30dd00 // indirect
 	github.com/goplus/gogen v1.20.6 // indirect
 	github.com/goplus/reflectx v1.5.0 // indirect
@@ -29,6 +34,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/klauspost/compress v1.18.1 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -44,4 +50,5 @@ require (
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/text v0.20.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect
+	modernc.org/fileutil v1.0.0 // indirect
 )
