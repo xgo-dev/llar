@@ -106,16 +106,13 @@ func TestKodoE2E_PutGet(t *testing.T) {
 		t.Fatalf("Put entry = %+v, want %+v", got, want)
 	}
 
-	stored, ok, err := store.Get(ctx, artifact.Key{
+	stored, err := store.Get(ctx, artifact.Key{
 		Module:    key.Module.Path,
 		Version:   key.Module.Version,
 		MatrixStr: key.Matrix,
 	})
 	if err != nil {
 		t.Fatalf("artifact Get after Put failed: %v", err)
-	}
-	if !ok {
-		t.Fatal("artifact Get after Put missed")
 	}
 	if stored.Source.Type != "kodo" {
 		t.Fatalf("artifact source type = %q, want kodo", stored.Source.Type)
@@ -147,16 +144,13 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	if got.Metadata != want.Metadata {
 		t.Fatalf("conflicting Put entry = %+v, want existing %+v", got, want)
 	}
-	afterConflict, ok, err := store.Get(ctx, artifact.Key{
+	afterConflict, err := store.Get(ctx, artifact.Key{
 		Module:    key.Module.Path,
 		Version:   key.Module.Version,
 		MatrixStr: key.Matrix,
 	})
 	if err != nil {
 		t.Fatalf("artifact Get after conflicting Put failed: %v", err)
-	}
-	if !ok {
-		t.Fatal("artifact Get after conflicting Put missed")
 	}
 	if afterConflict != stored {
 		t.Fatalf("artifact after conflicting Put = %+v, want existing %+v", afterConflict, stored)
@@ -168,7 +162,7 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	if err := os.RemoveAll(installDir); err != nil {
 		t.Fatalf("remove install dir before Get: %v", err)
 	}
-	got, ok, err = c.Get(ctx, key)
+	got, ok, err := c.Get(ctx, key)
 	if err != nil {
 		t.Fatalf("Get after Put failed: %v", err)
 	}

@@ -492,16 +492,13 @@ func (s *suite) newCache(workspaceDir string) *countingCache {
 }
 
 func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, metadata string) (artifact.Artifact, error) {
-	got, ok, err := s.artifacts.Get(ctx, artifact.Key{
+	got, err := s.artifacts.Get(ctx, artifact.Key{
 		Module:    key.Module.Path,
 		Version:   key.Module.Version,
 		MatrixStr: key.Matrix,
 	})
 	if err != nil {
 		return artifact.Artifact{}, fmt.Errorf("Get stored artifact %s: %w", keyString(key), err)
-	}
-	if !ok {
-		return artifact.Artifact{}, fmt.Errorf("stored artifact missing for %s", keyString(key))
 	}
 	if got.Source.Type != "kodo" {
 		return artifact.Artifact{}, fmt.Errorf("source type = %q, want kodo", got.Source.Type)

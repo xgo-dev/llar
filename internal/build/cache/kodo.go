@@ -76,16 +76,16 @@ func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
 	if c.artifacts == nil {
 		return Entry{}, false, nil
 	}
-	art, ok, err := c.artifacts.Get(ctx, artifact.Key{
+	art, err := c.artifacts.Get(ctx, artifact.Key{
 		Module:    key.Module.Path,
 		Version:   key.Module.Version,
 		MatrixStr: key.Matrix,
 	})
+	if errors.Is(err, artifact.ErrNotFound) {
+		return Entry{}, false, nil
+	}
 	if err != nil {
 		return Entry{}, false, err
-	}
-	if !ok {
-		return Entry{}, false, nil
 	}
 	if art.Source.Type != "kodo" {
 		return Entry{}, false, fmt.Errorf("artifact source type = %q, want kodo", art.Source.Type)
