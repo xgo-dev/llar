@@ -117,13 +117,9 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		return Entry{}, err
 	}
 	checksum := hex.EncodeToString(hash.Sum(nil))
-	var sourceURL string
-	if c.artifacts != nil {
-		var err error
-		sourceURL, err = kodoSourceURL(c.publicDomain, objectName)
-		if err != nil {
-			return Entry{}, err
-		}
+	sourceURL, err := kodoSourceURL(c.publicDomain, objectName)
+	if err != nil {
+		return Entry{}, err
 	}
 
 	err = c.uploader.UploadFile(ctx, file.Name(), &uploader.ObjectOptions{
@@ -143,22 +139,20 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		}
 		return Entry{}, err
 	}
-	if c.artifacts != nil {
-		if _, err := c.artifacts.Put(ctx, artifact.Key{
-			Module:    key.Module.Path,
-			Version:   key.Module.Version,
-			MatrixStr: key.Matrix,
-		}, artifact.Artifact{
-			Source: artifact.Source{
-				Type: "kodo",
-				URL:  sourceURL,
-			},
-			Type:     "tar.gz",
-			Metadata: entry.Metadata,
-			Checksum: checksum,
-		}); err != nil {
-			return Entry{}, err
-		}
+	if _, err := c.artifacts.Put(ctx, artifact.Key{
+		Module:    key.Module.Path,
+		Version:   key.Module.Version,
+		MatrixStr: key.Matrix,
+	}, artifact.Artifact{
+		Source: artifact.Source{
+			Type: "kodo",
+			URL:  sourceURL,
+		},
+		Type:     "tar.gz",
+		Metadata: entry.Metadata,
+		Checksum: checksum,
+	}); err != nil {
+		return Entry{}, err
 	}
 	return entry, nil
 }
