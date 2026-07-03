@@ -2,6 +2,7 @@ package cache
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -95,7 +96,7 @@ func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
 		return Entry{}, false, err
 	}
 	if c.workspaceDir != "" {
-		if err := c.restore(ctx, key, objectName, art.Checksum); err != nil {
+		if err := c.restore(ctx, key, objectName, art.Type, art.Checksum); err != nil {
 			return Entry{}, false, err
 		}
 	}
@@ -188,7 +189,7 @@ func (c *kodoCache) installDir(key Key) (string, error) {
 	return filepath.Join(c.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, key.Module.Version, key.Matrix)), nil
 }
 
-func (c *kodoCache) restore(ctx context.Context, key Key, objectName, checksum string) error {
+func (c *kodoCache) restore(ctx context.Context, key Key, objectName, artifactType, checksum string) error {
 	installDir, err := c.installDir(key)
 	if err != nil {
 		return err
@@ -227,12 +228,7 @@ func (c *kodoCache) restore(ctx context.Context, key Key, objectName, checksum s
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
 		return err
 	}
-	file, err = os.Open(fileName)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	return extractTarGzip(file, installDir)
+	return extractArtifact(fileName, artifactType, installDir)
 }
 
 func normalizePublicDomain(domain string) string {
@@ -365,6 +361,22 @@ func writeTarGzip(w io.Writer, src fs.FS) error {
 	return gzw.Close()
 }
 
+func extractArtifact(fileName, artifactType, dst string) error {
+	switch artifactType {
+	case "tar.gz":
+		file, err := os.Open(fileName)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		return extractTarGzip(file, dst)
+	case "zip":
+		return extractZip(fileName, dst)
+	default:
+		return fmt.Errorf("unsupported artifact type %q", artifactType)
+	}
+}
+
 func extractTarGzip(r io.Reader, dst string) error {
 	gzr, err := gzip.NewReader(r)
 	if err != nil {
@@ -381,7 +393,7 @@ func extractTarGzip(r io.Reader, dst string) error {
 		if err != nil {
 			return err
 		}
-		name, err := cleanTarName(header.Name)
+		name, err := cleanArchiveName(header.Name)
 		if err != nil {
 			return err
 		}
@@ -414,10 +426,63 @@ func extractTarGzip(r io.Reader, dst string) error {
 	}
 }
 
-func cleanTarName(name string) (string, error) {
+func extractZip(fileName, dst string) error {
+	zr, err := zip.OpenReader(fileName)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	for _, entry := range zr.File {
+		name, err := cleanArchiveName(entry.Name)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, name)
+		info := entry.FileInfo()
+		mode := info.Mode()
+
+		if info.IsDir() {
+			if err := os.MkdirAll(target, mode.Perm()); err != nil {
+				return err
+			}
+			continue
+		}
+		if !mode.IsRegular() {
+			return fmt.Errorf("extract %s: unsupported zip mode %s", entry.Name, mode)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		src, err := entry.Open()
+		if err != nil {
+			return err
+		}
+		file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+		if err != nil {
+			_ = src.Close()
+			return err
+		}
+		_, copyErr := io.Copy(file, src)
+		closeErr := file.Close()
+		srcCloseErr := src.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if srcCloseErr != nil {
+			return srcCloseErr
+		}
+	}
+	return nil
+}
+
+func cleanArchiveName(name string) (string, error) {
 	name = filepath.Clean(filepath.FromSlash(name))
 	if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe tar path %q", name)
+		return "", fmt.Errorf("unsafe archive path %q", name)
 	}
 	return name, nil
 }
