@@ -2,10 +2,41 @@ package cache
 
 import (
 	"archive/zip"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/goplus/llar/internal/artifact"
+	"github.com/goplus/llar/mod/module"
 )
+
+func TestKodoGetDoesNotParseSourceURL(t *testing.T) {
+	c := NewKodo(KodoConfig{
+		Artifacts: staticArtifactStore{
+			art: artifact.Artifact{
+				Source:   artifact.Source{Type: "kodo", URL: "not a kodo object name"},
+				Type:     "zip",
+				Metadata: "-lz",
+			},
+		},
+	}).(*kodoCache)
+	key := Key{
+		Module: module.Version{Path: "madler/zlib", Version: "v1.3.2"},
+		Matrix: "amd64-linux",
+	}
+
+	got, ok, err := c.Get(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("Get missed")
+	}
+	if got.Metadata != "-lz" {
+		t.Fatalf("metadata = %q, want -lz", got.Metadata)
+	}
+}
 
 func TestExtractArtifactUsesArtifactType(t *testing.T) {
 	src := t.TempDir()
@@ -69,6 +100,22 @@ func TestExtractArtifactUsesArtifactType(t *testing.T) {
 		}
 		assertFileContent(t, filepath.Join(dst, "include", "zlib.h"), "zlib header\n")
 	})
+}
+
+type staticArtifactStore struct {
+	art artifact.Artifact
+}
+
+func (s staticArtifactStore) Get(context.Context, artifact.Key) (artifact.Artifact, error) {
+	return s.art, nil
+}
+
+func (s staticArtifactStore) Put(_ context.Context, _ artifact.Key, art artifact.Artifact) (artifact.Artifact, error) {
+	return art, nil
+}
+
+func (s staticArtifactStore) Delete(context.Context, artifact.Key) error {
+	return nil
 }
 
 func assertFileContent(t *testing.T, name, want string) {

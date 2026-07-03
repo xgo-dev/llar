@@ -39,9 +39,6 @@ func TestKodoObjectName(t *testing.T) {
 	if want := "http://llar.liuxi.ng/cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"; got != want {
 		t.Fatalf("source url = %q, want %q", got, want)
 	}
-	if _, err := parseKodoSourceURL("file:///cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"); err == nil {
-		t.Fatal("non-http source url should be rejected")
-	}
 }
 
 func TestKodoE2E_PutGet(t *testing.T) {

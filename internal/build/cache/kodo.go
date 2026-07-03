@@ -91,11 +91,8 @@ func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
 	if art.Source.Type != "kodo" {
 		return Entry{}, false, fmt.Errorf("artifact source type = %q, want kodo", art.Source.Type)
 	}
-	objectName, err := parseKodoSourceURL(art.Source.URL)
-	if err != nil {
-		return Entry{}, false, err
-	}
 	if c.workspaceDir != "" {
+		objectName := c.objectName(key)
 		if err := c.restore(ctx, key, objectName, art.Type, art.Checksum); err != nil {
 			return Entry{}, false, err
 		}
@@ -252,24 +249,6 @@ func kodoSourceURL(domain, objectName string) (string, error) {
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
-}
-
-func parseKodoSourceURL(raw string) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return "", err
-	}
-	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
-		return "", fmt.Errorf("invalid kodo source url %q", raw)
-	}
-	objectName, err := url.PathUnescape(strings.TrimPrefix(u.EscapedPath(), "/"))
-	if err != nil {
-		return "", err
-	}
-	if objectName == "" {
-		return "", fmt.Errorf("invalid kodo source url %q", raw)
-	}
-	return objectName, nil
 }
 
 func isKodoObjectNotFound(err error) bool {
