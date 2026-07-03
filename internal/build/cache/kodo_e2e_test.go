@@ -132,6 +132,34 @@ func TestKodoE2E_PutGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if err := os.WriteFile(filepath.Join(installDir, "lib", "libz.a"), []byte("conflicting zlib archive\n"), 0o644); err != nil {
+		t.Fatalf("rewrite zlib archive before conflicting Put: %v", err)
+	}
+	conflict := Entry{
+		Metadata: "-lz-conflict",
+		Deps:     []module.Version{{Path: "example/other", Version: "v2.0.0"}},
+	}
+	got, err = c.Put(ctx, key, os.DirFS(installDir), conflict)
+	if err != nil {
+		t.Fatalf("conflicting Put failed: %v", err)
+	}
+	if got.Metadata != want.Metadata || !slices.Equal(got.Deps, want.Deps) {
+		t.Fatalf("conflicting Put entry = %+v, want existing %+v", got, want)
+	}
+	afterConflict, ok, err := store.Get(ctx, artifactKey(key))
+	if err != nil {
+		t.Fatalf("artifact Get after conflicting Put failed: %v", err)
+	}
+	if !ok {
+		t.Fatal("artifact Get after conflicting Put missed")
+	}
+	if afterConflict != stored {
+		t.Fatalf("artifact after conflicting Put = %+v, want existing %+v", afterConflict, stored)
+	}
+	if err := assertPublicURLChecksum(ctx, stored.Source.URL, stored.Checksum); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := os.RemoveAll(installDir); err != nil {
 		t.Fatalf("remove install dir before Get: %v", err)
 	}

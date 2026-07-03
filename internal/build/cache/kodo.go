@@ -128,6 +128,7 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 	if err != nil {
 		return Entry{}, err
 	}
+	putPolicy.SetInsertOnly(1)
 
 	file, err := os.CreateTemp("", "llar-kodo-*.tar.gz")
 	if err != nil {
@@ -164,6 +165,13 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		},
 	}, nil)
 	if err != nil {
+		if isKodoObjectExists(err) {
+			if got, ok, getErr := c.Get(ctx, key); getErr != nil {
+				return Entry{}, getErr
+			} else if ok {
+				return got, nil
+			}
+		}
 		return Entry{}, err
 	}
 	if c.artifacts != nil {
@@ -325,6 +333,11 @@ func kodoEntryFromMetadata(metadata map[string]string) (Entry, bool) {
 func isKodoObjectNotFound(err error) bool {
 	var info *qiniuclient.ErrorInfo
 	return errors.As(err, &info) && info.Code == 612
+}
+
+func isKodoObjectExists(err error) bool {
+	var info *qiniuclient.ErrorInfo
+	return errors.As(err, &info) && info.Code == 614
 }
 
 func fileSHA256(name string) (string, error) {
