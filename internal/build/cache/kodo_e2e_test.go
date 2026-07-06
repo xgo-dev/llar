@@ -17,10 +17,6 @@ import (
 
 	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/mod/module"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func TestKodoObjectName(t *testing.T) {
@@ -55,7 +51,12 @@ func TestKodoE2E_PutGet(t *testing.T) {
 		prefix += "/"
 	}
 	prefix += fmt.Sprintf("llar-kodo-e2e/%d", time.Now().UnixNano())
-	store := newKodoE2EArtifactStore(t)
+	store := artifact.NewKodoArtifact(artifact.KodoArtifactConfig{
+		AccessKey: accessKey,
+		SecretKey: secretKey,
+		Bucket:    bucket,
+		Prefix:    prefix,
+	})
 
 	const zlibVersion = "v1.3.1"
 	matrix := hostMatrix()
@@ -175,41 +176,6 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(installDir, "lib")); err != nil {
 		t.Fatalf("restored zlib lib dir not found in %s: %v", installDir, err)
 	}
-}
-
-func newKodoE2EArtifactStore(t *testing.T) artifact.Store {
-	t.Helper()
-
-	var dial gorm.Dialector
-	if dsn := os.Getenv("POSTGRES_DSN"); dsn != "" {
-		dial = postgres.Open(dsn)
-	} else {
-		dial = sqlite.Open(filepath.Join(t.TempDir(), "artifacts.db"))
-	}
-	db, err := gorm.Open(dial, &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	if err != nil {
-		t.Fatalf("gorm.Open: %v", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("db.DB: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := sqlDB.Close(); err != nil {
-			t.Fatalf("db.Close: %v", err)
-		}
-	})
-	if err := db.Exec("DROP TABLE IF EXISTS artifacts").Error; err != nil {
-		t.Fatalf("drop artifacts: %v", err)
-	}
-
-	store, err := artifact.NewGormStore(db)
-	if err != nil {
-		t.Fatalf("NewGormStore: %v", err)
-	}
-	return store
 }
 
 func buildZlibWithLLAR(t *testing.T, version, matrix string) (string, string, string) {

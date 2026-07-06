@@ -29,14 +29,9 @@ import (
 	qiniudownloader "github.com/qiniu/go-sdk/v7/storagev2/downloader"
 	httpclient "github.com/qiniu/go-sdk/v7/storagev2/http_client"
 	"github.com/qiniu/go-sdk/v7/storagev2/objects"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 const (
-	defaultPostgresDSN   = "host=localhost port=5432 user=llar password=llar dbname=llar_e2e sslmode=disable"
 	defaultTarget        = "madler/zlib@v1.3.1"
 	defaultSharedTargets = "DaveGamble/cJSON@v1.7.18,pnggroup/libpng@v1.6.47"
 	defaultFormulaRoot   = "testdata/kodo-e2e/formulas"
@@ -45,7 +40,6 @@ const (
 
 func main() {
 	var cfg config
-	flag.StringVar(&cfg.postgresDSN, "postgres-dsn", envOrDefault("POSTGRES_DSN", defaultPostgresDSN), "Postgres DSN; empty uses a temporary SQLite database")
 	flag.StringVar(&cfg.accessKey, "qiniu-access-key", os.Getenv("QINIU_ACCESS_KEY"), "Qiniu access key")
 	flag.StringVar(&cfg.secretKey, "qiniu-secret-key", os.Getenv("QINIU_SECRET_KEY"), "Qiniu secret key")
 	flag.StringVar(&cfg.bucket, "qiniu-bucket", os.Getenv("QINIU_BUCKET"), "Qiniu Kodo bucket")
@@ -69,7 +63,6 @@ func main() {
 }
 
 type config struct {
-	postgresDSN   string
 	accessKey     string
 	secretKey     string
 	bucket        string
@@ -147,22 +140,6 @@ func run(cfg config) error {
 	}
 	runPrefix += fmt.Sprintf("llar-kodo-e2e/%d", time.Now().UnixNano())
 
-	db, cleanupDB, err := openDatabase(cfg.postgresDSN)
-	if err != nil {
-		return err
-	}
-	defer cleanupDB()
-	if err := resetDatabase(ctx, db); err != nil {
-		return err
-	}
-	artifacts, err := artifact.NewGormStore(db)
-	if err != nil {
-		return fmt.Errorf("NewGormStore: %w", err)
-	}
-	if count := artifactCount(ctx, db); count != 0 {
-		return fmt.Errorf("artifact count after reset = %d, want 0", count)
-	}
-
 	kodo := newKodoClient(cfg)
 	if err := kodo.deletePrefix(ctx, runPrefix); err != nil {
 		return fmt.Errorf("cleanup kodo prefix before run: %w", err)
@@ -172,6 +149,12 @@ func run(cfg config) error {
 			log.Printf("cleanup kodo prefix after run: %v", err)
 		}
 	}()
+	artifacts := artifact.NewKodoArtifact(artifact.KodoArtifactConfig{
+		AccessKey: cfg.accessKey,
+		SecretKey: cfg.secretKey,
+		Bucket:    cfg.bucket,
+		Prefix:    runPrefix,
+	})
 
 	s := suite{
 		cfg: configData{
@@ -187,7 +170,6 @@ func run(cfg config) error {
 		},
 		formulas:  newLocalFormulaStore(cfg.formulaRoot),
 		artifacts: artifacts,
-		db:        db,
 		kodo:      kodo,
 	}
 
@@ -217,9 +199,6 @@ func run(cfg config) error {
 	}
 
 	wantArtifacts := int64(6)
-	if count := artifactCount(ctx, db); count != wantArtifacts {
-		return fmt.Errorf("artifact count after E2E cases = %d, want %d", count, wantArtifacts)
-	}
 	if count, err := kodo.objectCount(ctx, runPrefix); err != nil {
 		return err
 	} else if count != wantArtifacts {
@@ -245,7 +224,6 @@ type suite struct {
 	cfg       configData
 	formulas  *localFormulaStore
 	artifacts artifact.Store
-	db        *gorm.DB
 	kodo      *kodoClient
 
 	baseCache     *countingCache
@@ -677,48 +655,6 @@ func (c *kodoClient) deletePrefix(ctx context.Context, prefix string) error {
 		}
 	}
 	return nil
-}
-
-func openDatabase(dsn string) (*gorm.DB, func(), error) {
-	var dial gorm.Dialector
-	var cleanup func()
-	if strings.TrimSpace(dsn) == "" {
-		name := filepath.Join(mustTempDir("llar-kodo-e2e-db-"), "artifacts.db")
-		dial = sqlite.Open(name)
-		cleanup = func() {}
-	} else {
-		dial = postgres.Open(dsn)
-		cleanup = func() {}
-	}
-	db, err := gorm.Open(dial, &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	if err != nil {
-		return nil, cleanup, fmt.Errorf("open database: %w", err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return nil, cleanup, fmt.Errorf("database handle: %w", err)
-	}
-	return db, func() {
-		_ = sqlDB.Close()
-		cleanup()
-	}, nil
-}
-
-func resetDatabase(ctx context.Context, db *gorm.DB) error {
-	if err := db.WithContext(ctx).Exec("DROP TABLE IF EXISTS artifacts").Error; err != nil {
-		return fmt.Errorf("drop artifacts table: %w", err)
-	}
-	return nil
-}
-
-func artifactCount(ctx context.Context, db *gorm.DB) int64 {
-	var count int64
-	if err := db.WithContext(ctx).Table("artifacts").Count(&count).Error; err != nil {
-		return -1
-	}
-	return count
 }
 
 func validateLocalFormula(root string, target module.Version) error {
