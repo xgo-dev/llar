@@ -184,6 +184,7 @@ func run(cfg config) error {
 		run  func(context.Context) error
 	}{
 		{"cold build uploads and stores artifact", s.coldBuild},
+		{"conflicting put preserves existing artifact", s.conflictingPutPreservesArtifact},
 		{"repeated build uses stored artifact", s.repeatedBuild},
 		{"new builder instance uses persisted artifact cache", s.persistedCache},
 		{"different matrix stores independent artifact", s.differentMatrix},
@@ -256,6 +257,34 @@ func (s *suite) coldBuild(ctx context.Context) error {
 	}
 	s.baseResult = got
 	s.baseArtifact = art
+	return nil
+}
+
+func (s *suite) conflictingPutPreservesArtifact(ctx context.Context) error {
+	conflictDir := mustTempDir("llar-kodo-e2e-conflict-")
+	if err := os.MkdirAll(filepath.Join(conflictDir, "lib"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(conflictDir, "lib", "libz.a"), []byte("conflicting zlib archive\n"), 0o644); err != nil {
+		return err
+	}
+
+	key := cacheKey(s.cfg.target, s.cfg.matrix)
+	c := s.newCache(mustTempDir("llar-kodo-e2e-conflict-workspace-"))
+	got, err := c.Put(ctx, key, os.DirFS(conflictDir), buildcache.Entry{Metadata: s.baseResult.Metadata})
+	if err != nil {
+		return err
+	}
+	if got.Metadata != s.baseResult.Metadata {
+		return fmt.Errorf("conflicting Put metadata = %q, want %q", got.Metadata, s.baseResult.Metadata)
+	}
+	art, err := s.assertStoredArtifact(ctx, key, s.baseResult.Metadata)
+	if err != nil {
+		return err
+	}
+	if art != s.baseArtifact {
+		return fmt.Errorf("stored artifact changed after conflicting Put = %+v, want %+v", art, s.baseArtifact)
+	}
 	return nil
 }
 

@@ -133,7 +133,7 @@ func TestKodoE2E_PutGet(t *testing.T) {
 		t.Fatalf("rewrite zlib archive before conflicting Put: %v", err)
 	}
 	conflict := Entry{
-		Metadata: "-lz-conflict",
+		Metadata: metadata,
 	}
 	got, err = c.Put(ctx, key, os.DirFS(installDir), conflict)
 	if err != nil {
