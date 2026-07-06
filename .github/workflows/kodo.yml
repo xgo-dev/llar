@@ -52,3 +52,23 @@ jobs:
           QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
           QINIU_PREFIX: ${{ secrets.QINIU_PREFIX }}
         run: go test -v -ldflags="-checklinkname=0" ./internal/artifact -run '^TestKodoArtifactE2E$' -count=1
+
+      - name: Install LLAR
+        run: |
+          go install -ldflags="-checklinkname=0" github.com/goplus/llar/cmd/llar
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Run Kodo cache tests
+        env:
+          QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+          QINIU_PREFIX: ${{ secrets.QINIU_PREFIX }}
+        run: go test -v -ldflags="-checklinkname=0" -coverprofile kodo-cache-coverage.out ./internal/build/cache -count=1
+
+      - name: Upload Kodo cache coverage
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          disable_search: true
+          files: kodo-cache-coverage.out

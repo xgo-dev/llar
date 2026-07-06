@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -128,6 +129,9 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	if err := assertPublicURLChecksum(ctx, stored.Source.URL, stored.Checksum); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.restore(ctx, key, objectName, stored.Type, strings.Repeat("f", 64)); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("restore with wrong checksum error = %v, want checksum error", err)
+	}
 
 	if err := os.WriteFile(filepath.Join(installDir, "lib", "libz.a"), []byte("conflicting zlib archive\n"), 0o644); err != nil {
 		t.Fatalf("rewrite zlib archive before conflicting Put: %v", err)
@@ -157,6 +161,24 @@ func TestKodoE2E_PutGet(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	putErrKey := Key{
+		Module: key.Module,
+		Matrix: matrix + "-put-error",
+	}
+	putErrObjectName := c.objectName(putErrKey)
+	defer func() {
+		if err := c.objects.Bucket(c.bucket).Object(putErrObjectName).Delete().Call(ctx); err != nil && !isKodoObjectNotFound(err) {
+			t.Errorf("delete %s: %v", putErrObjectName, err)
+		}
+	}()
+	putErr := errors.New("artifact put failed")
+	realStore := c.artifacts
+	c.artifacts = &recordingArtifactStore{putErr: putErr}
+	if _, err := c.Put(ctx, putErrKey, os.DirFS(installDir), want); !errors.Is(err, putErr) {
+		t.Fatalf("Put with artifact put error = %v, want %v", err, putErr)
+	}
+	c.artifacts = realStore
+
 	if err := os.RemoveAll(installDir); err != nil {
 		t.Fatalf("remove install dir before Get: %v", err)
 	}
@@ -175,6 +197,21 @@ func TestKodoE2E_PutGet(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(installDir, "lib")); err != nil {
 		t.Fatalf("restored zlib lib dir not found in %s: %v", installDir, err)
+	}
+
+	workspaceFile := filepath.Join(t.TempDir(), "workspace")
+	if err := os.WriteFile(workspaceFile, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldWorkspaceDir := c.workspaceDir
+	c.workspaceDir = workspaceFile
+	if err := c.restore(ctx, key, objectName, stored.Type, ""); err == nil {
+		t.Fatal("restore should fail when workspace dir is a file")
+	}
+	c.workspaceDir = oldWorkspaceDir
+
+	if err := c.restore(ctx, key, objectName, "rar", ""); err == nil || !strings.Contains(err.Error(), "unsupported artifact type") {
+		t.Fatalf("restore with unsupported type error = %v, want unsupported artifact type", err)
 	}
 }
 
@@ -259,25 +296,36 @@ func envOrDefault(name, fallback string) string {
 }
 
 func assertPublicURLChecksum(ctx context.Context, rawURL, checksum string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+		} else {
+			hash := sha256.New()
+			_, copyErr := io.Copy(hash, resp.Body)
+			closeErr := resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				lastErr = fmt.Errorf("GET %s: %s", rawURL, resp.Status)
+			} else if copyErr != nil {
+				lastErr = copyErr
+			} else if closeErr != nil {
+				lastErr = closeErr
+			} else if got := hex.EncodeToString(hash.Sum(nil)); got != checksum {
+				lastErr = fmt.Errorf("GET %s checksum = %s, want %s", rawURL, got, checksum)
+			} else {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", rawURL, resp.Status)
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, resp.Body); err != nil {
-		return err
-	}
-	got := hex.EncodeToString(hash.Sum(nil))
-	if got != checksum {
-		return fmt.Errorf("GET %s checksum = %s, want %s", rawURL, got, checksum)
-	}
-	return nil
+	return lastErr
 }
