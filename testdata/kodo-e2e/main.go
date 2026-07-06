@@ -36,6 +36,7 @@ const (
 	defaultSharedTargets = "DaveGamble/cJSON@v1.7.18,pnggroup/libpng@v1.6.47"
 	defaultFormulaRoot   = "testdata/kodo-e2e/formulas"
 	defaultPublicDomain  = "llar.liuxi.ng"
+	defaultTimeout       = 15 * time.Minute
 )
 
 func main() {
@@ -49,7 +50,7 @@ func main() {
 	flag.StringVar(&cfg.target, "target", defaultTarget, "target module@version")
 	flag.StringVar(&cfg.sharedTargets, "shared-targets", defaultSharedTargets, "comma-separated module@version targets sharing a dependency")
 	flag.StringVar(&cfg.matrix, "matrix", hostMatrix(), "matrix string")
-	flag.DurationVar(&cfg.timeout, "timeout", 15*time.Minute, "E2E timeout")
+	flag.DurationVar(&cfg.timeout, "timeout", defaultTimeout, "E2E timeout")
 	flag.Parse()
 
 	if err := cfg.validate(); err != nil {
@@ -185,6 +186,8 @@ func run(cfg config) error {
 	}{
 		{"cold build uploads and stores artifact", s.coldBuild},
 		{"conflicting put preserves existing artifact", s.conflictingPutPreservesArtifact},
+		{"restore rejects bad artifact metadata", s.restoreRejectsBadArtifactMetadata},
+		{"artifact put failure returns error after upload", s.artifactPutFailure},
 		{"repeated build uses stored artifact", s.repeatedBuild},
 		{"new builder instance uses persisted artifact cache", s.persistedCache},
 		{"different matrix stores independent artifact", s.differentMatrix},
@@ -284,6 +287,68 @@ func (s *suite) conflictingPutPreservesArtifact(ctx context.Context) error {
 	}
 	if art != s.baseArtifact {
 		return fmt.Errorf("stored artifact changed after conflicting Put = %+v, want %+v", art, s.baseArtifact)
+	}
+	return nil
+}
+
+func (s *suite) restoreRejectsBadArtifactMetadata(ctx context.Context) error {
+	key := cacheKey(s.cfg.target, s.cfg.matrix)
+	c := s.newCache(mustTempDir("llar-kodo-e2e-restore-"))
+
+	badChecksum := s.baseArtifact
+	badChecksum.Checksum = strings.Repeat("f", 64)
+	if _, err := s.artifacts.Put(ctx, artifactKey(key), badChecksum); err != nil {
+		return fmt.Errorf("write bad checksum artifact: %w", err)
+	}
+	if _, _, err := c.Get(ctx, key); err == nil || !strings.Contains(err.Error(), "checksum") {
+		return fmt.Errorf("Get with bad checksum error = %v, want checksum error", err)
+	}
+	if _, err := s.artifacts.Put(ctx, artifactKey(key), s.baseArtifact); err != nil {
+		return fmt.Errorf("restore checksum artifact: %w", err)
+	}
+
+	workspaceFile := filepath.Join(mustTempDir("llar-kodo-e2e-workspace-file-"), "workspace")
+	if err := os.WriteFile(workspaceFile, []byte("not a directory\n"), 0o644); err != nil {
+		return err
+	}
+	if _, _, err := s.newCache(workspaceFile).Get(ctx, key); err == nil {
+		return fmt.Errorf("Get with workspace file succeeded, want error")
+	}
+
+	badType := s.baseArtifact
+	badType.Type = "rar"
+	if _, err := s.artifacts.Put(ctx, artifactKey(key), badType); err != nil {
+		return fmt.Errorf("write bad type artifact: %w", err)
+	}
+	if _, _, err := c.Get(ctx, key); err == nil || !strings.Contains(err.Error(), "unsupported artifact type") {
+		return fmt.Errorf("Get with bad artifact type error = %v, want unsupported artifact type", err)
+	}
+	if _, err := s.artifacts.Put(ctx, artifactKey(key), s.baseArtifact); err != nil {
+		return fmt.Errorf("restore artifact type: %w", err)
+	}
+	return nil
+}
+
+func (s *suite) artifactPutFailure(ctx context.Context) error {
+	key := cacheKey(s.cfg.target, s.cfg.matrix+"-put-error")
+	objectName := objectNameFor(s.cfg.prefix, key)
+	defer func() {
+		if err := s.kodo.objects.Bucket(s.cfg.bucket).Object(objectName).Delete().Call(ctx); err != nil && !isKodoObjectNotFound(err) {
+			log.Printf("cleanup kodo object %s: %v", objectName, err)
+		}
+	}()
+
+	putErr := errors.New("artifact put failed")
+	c := buildcache.NewKodo(buildcache.KodoConfig{
+		AccessKey:    s.cfg.accessKey,
+		SecretKey:    s.cfg.secretKey,
+		Bucket:       s.cfg.bucket,
+		PublicDomain: s.cfg.publicDomain,
+		Prefix:       s.cfg.prefix,
+		Artifacts:    failingArtifactStore{putErr: putErr},
+	})
+	if _, err := c.Put(ctx, key, os.DirFS(s.baseResult.OutputDir), buildcache.Entry{Metadata: s.baseResult.Metadata}); !errors.Is(err, putErr) {
+		return fmt.Errorf("Put with artifact put error = %v, want %v", err, putErr)
 	}
 	return nil
 }
@@ -499,11 +564,7 @@ func (s *suite) newCache(workspaceDir string) *countingCache {
 }
 
 func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, metadata string) (artifact.Artifact, error) {
-	got, err := s.artifacts.Get(ctx, artifact.Key{
-		Module:    key.Module.Path,
-		Version:   key.Module.Version,
-		MatrixStr: key.Matrix,
-	})
+	got, err := s.artifacts.Get(ctx, artifactKey(key))
 	if err != nil {
 		return artifact.Artifact{}, fmt.Errorf("Get stored artifact %s: %w", keyString(key), err)
 	}
@@ -731,6 +792,14 @@ func targetKey(target module.Version) string {
 	return target.Path + "@" + target.Version
 }
 
+func artifactKey(key buildcache.Key) artifact.Key {
+	return artifact.Key{
+		Module:    key.Module.Path,
+		Version:   key.Module.Version,
+		MatrixStr: key.Matrix,
+	}
+}
+
 func objectNameFor(prefix string, key buildcache.Key) string {
 	parts := make([]string, 0, 4)
 	if prefix != "" {
@@ -814,27 +883,38 @@ func fileSHA256(name string) (string, error) {
 }
 
 func assertPublicURLChecksum(ctx context.Context, rawURL, checksum string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return err
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+		} else {
+			hash := sha256.New()
+			_, copyErr := io.Copy(hash, resp.Body)
+			closeErr := resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				lastErr = fmt.Errorf("GET %s: %s", rawURL, resp.Status)
+			} else if copyErr != nil {
+				lastErr = copyErr
+			} else if closeErr != nil {
+				lastErr = closeErr
+			} else if got := hex.EncodeToString(hash.Sum(nil)); got != checksum {
+				lastErr = fmt.Errorf("GET %s checksum = %s, want %s", rawURL, got, checksum)
+			} else {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", rawURL, resp.Status)
-	}
-	hash := sha256.New()
-	if _, err := io.Copy(hash, resp.Body); err != nil {
-		return err
-	}
-	got := hex.EncodeToString(hash.Sum(nil))
-	if got != checksum {
-		return fmt.Errorf("GET %s checksum = %s, want %s", rawURL, got, checksum)
-	}
-	return nil
+	return lastErr
 }
 
 func mustTempDir(pattern string) string {
@@ -865,6 +945,25 @@ type namedBuildResult struct {
 	target module.Version
 	result build.Result
 	err    error
+}
+
+type failingArtifactStore struct {
+	putErr error
+}
+
+func (s failingArtifactStore) Get(context.Context, artifact.Key) (artifact.Artifact, error) {
+	return artifact.Artifact{}, artifact.ErrNotFound
+}
+
+func (s failingArtifactStore) Put(context.Context, artifact.Key, artifact.Artifact) (artifact.Artifact, error) {
+	if s.putErr != nil {
+		return artifact.Artifact{}, s.putErr
+	}
+	return artifact.Artifact{}, nil
+}
+
+func (s failingArtifactStore) Delete(context.Context, artifact.Key) error {
+	return nil
 }
 
 func waitBuildResult(ctx context.Context, ch <-chan buildResult) (buildResult, error) {

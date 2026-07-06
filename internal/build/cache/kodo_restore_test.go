@@ -19,6 +19,24 @@ import (
 	qiniuclient "github.com/qiniu/go-sdk/v7/client"
 )
 
+func TestKodoObjectName(t *testing.T) {
+	c := NewKodo(KodoConfig{Prefix: "/cache/"}).(*kodoCache)
+	key := Key{
+		Module: module.Version{Path: "madler/zlib", Version: "v1.3.2"},
+		Matrix: "amd64-linux",
+	}
+	if got, want := c.objectName(key), "cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"; got != want {
+		t.Fatalf("object name = %q, want %q", got, want)
+	}
+	got, err := kodoSourceURL("llar.liuxi.ng", c.objectName(key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "http://llar.liuxi.ng/cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"; got != want {
+		t.Fatalf("source url = %q, want %q", got, want)
+	}
+}
+
 func TestKodoGetArtifactMissAndError(t *testing.T) {
 	key := Key{
 		Module: module.Version{Path: "madler/zlib", Version: "v1.3.2"},
