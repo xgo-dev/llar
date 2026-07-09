@@ -19,6 +19,7 @@ func init() {
 			"github.com/goplus/llar/mod/module": "module",
 			"github.com/qiniu/x/gsh":            "gsh",
 			"io/fs":                             "fs",
+			"maps":                              "maps",
 			"slices":                            "slices",
 			"sort":                              "sort",
 		},
@@ -36,6 +37,7 @@ func init() {
 		Vars:       map[string]reflect.Value{},
 		Funcs: map[string]reflect.Value{
 			"Gopt_ModuleF_Main": reflect.ValueOf(q.Gopt_ModuleF_Main),
+			"NewContext":        reflect.ValueOf(q.NewContext),
 		},
 		TypedConsts: map[string]ixgo.TypedConst{},
 		UntypedConsts: map[string]ixgo.UntypedConst{

@@ -5,6 +5,7 @@
 package formula
 
 import (
+	"maps"
 	"slices"
 	"sort"
 
@@ -23,16 +24,21 @@ type ModuleF struct {
 	fOnRequire func(proj *Project, deps *ModuleDeps)
 	fOnBuild   func(ctx *Context, proj *Project, out *BuildResult)
 	fOnTest    func(ctx *Context, proj *Project, out *TestResult)
+	fFilter    func() bool
 
 	modPath    string
 	modFromVer string
-	matrix     Matrix
+	target     Matrix
 }
 
 type Matrix struct {
-	Require        map[string][]string
-	Options        map[string][]string
-	DefaultOptions map[string][]string
+	Require  map[string][]string
+	Options  map[string][]string
+	Defaults map[string][]string
+}
+
+type matrixTarget struct {
+	m Matrix
 }
 
 // Combinations returns all cartesian product combinations of the matrix.
@@ -126,8 +132,44 @@ func (p *ModuleF) app() *gsh.App {
 	return &p.App
 }
 
-func (p *ModuleF) Matrix(m Matrix) {
-	p.matrix = m
+func (p *ModuleF) Target() matrixTarget {
+	return matrixTarget{m: Matrix{
+		Require: maps.Clone(p.target.Require),
+		Options: maps.Clone(p.target.Options),
+	}}
+}
+
+// Require backs the XGo auto-property `target.require`.
+// In formula DSL, target.require["xxx"] maps to Target().Require()["xxx"].
+func (m matrixTarget) Require() map[string][]string {
+	return m.m.Require
+}
+
+// Options backs the XGo auto-property `target.options`.
+// In formula DSL, target.options["xxx"] maps to Target().Options()["xxx"].
+func (m matrixTarget) Options() map[string][]string {
+	return m.m.Options
+}
+
+// Defaults sets the formula's default option selections and initializes
+// the active options exposed through target.options.
+func (p *ModuleF) Defaults(options map[string]string) {
+	if p.target.Defaults == nil {
+		p.target.Defaults = make(map[string][]string, len(options))
+	}
+	if p.target.Options == nil {
+		p.target.Options = make(map[string][]string, len(options))
+	}
+	for key, value := range options {
+		values := []string{value}
+		p.target.Defaults[key] = values
+		p.target.Options[key] = values
+	}
+}
+
+// Filter records a predicate used to reject unsupported matrix selections.
+func (p *ModuleF) Filter(f func() bool) {
+	p.fFilter = f
 }
 
 // Id sets the module path that this formula serves.
