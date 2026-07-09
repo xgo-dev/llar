@@ -32,9 +32,9 @@ type ModuleF struct {
 }
 
 type Matrix struct {
-	Require  map[string][]string
-	Options  map[string][]string
-	Defaults map[string][]string
+	Require        map[string][]string
+	Options        map[string][]string
+	DefaultOptions map[string][]string
 }
 
 type matrixTarget struct {
@@ -154,15 +154,15 @@ func (m matrixTarget) Options() map[string][]string {
 // Defaults sets the formula's default option selections and initializes
 // the active options exposed through target.options.
 func (p *ModuleF) Defaults(options map[string]string) {
-	if p.target.Defaults == nil {
-		p.target.Defaults = make(map[string][]string, len(options))
+	if p.target.DefaultOptions == nil {
+		p.target.DefaultOptions = make(map[string][]string, len(options))
 	}
 	if p.target.Options == nil {
 		p.target.Options = make(map[string][]string, len(options))
 	}
 	for key, value := range options {
 		values := []string{value}
-		p.target.Defaults[key] = values
+		p.target.DefaultOptions[key] = values
 		p.target.Options[key] = values
 	}
 }

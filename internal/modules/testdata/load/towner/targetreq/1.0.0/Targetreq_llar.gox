@@ -1,0 +1,18 @@
+import "slices"
+
+id "towner/targetreq"
+fromVer "1.0.0"
+
+filter => {
+	return slices.contains(target.options["ssl"], "openssl")
+}
+
+onRequire (proj, deps) => {
+	if slices.contains(target.require["os"], "linux") && slices.contains(target.options["ssl"], "openssl") {
+		deps.require "towner/depmod", "1.0.0"
+	}
+}
+
+onBuild (ctx, proj, out) => {
+	out.setMetadata "-ltargetreq"
+}

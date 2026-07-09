@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/build"
 	buildcache "github.com/goplus/llar/internal/build/cache"
@@ -526,7 +527,11 @@ func (s *suite) concurrentSharedDependency(ctx context.Context) error {
 }
 
 func (s *suite) build(ctx context.Context, target module.Version, matrix, workspaceDir string, c buildcache.Cache) (build.Result, error) {
-	mods, err := modules.Load(ctx, target, modules.Options{FormulaStore: s.formulas})
+	targetMatrix := classfile.Matrix{Require: map[string][]string{"matrix": {matrix}}}
+	mods, err := modules.Load(ctx, target, modules.Options{
+		FormulaStore: s.formulas,
+		Matrix:       targetMatrix,
+	})
 	if err != nil {
 		return build.Result{}, fmt.Errorf("modules.Load %s: %w", targetKey(target), err)
 	}

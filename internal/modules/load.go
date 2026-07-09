@@ -60,6 +60,7 @@ type Module struct {
 type Options struct {
 	// FormulaStore is the store for downloading and caching formulas.
 	FormulaStore repo.Store
+	Matrix       classfile.Matrix
 }
 
 func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparator func(v1, v2 module.Version) int) (version string, err error) {
@@ -81,10 +82,11 @@ func latestVersion(ctx context.Context, modPath string, repo vcs.Repo, comparato
 type formulaContext struct {
 	moduleCache sync.Map
 	moduleFS    func(ctx context.Context, modPath string) (fs.FS, error)
+	matrix      classfile.Matrix
 }
 
-func newFormulaContext(moduleFS func(ctx context.Context, modPath string) (fs.FS, error)) *formulaContext {
-	return &formulaContext{moduleFS: moduleFS}
+func newFormulaContext(moduleFS func(ctx context.Context, modPath string) (fs.FS, error), matrix classfile.Matrix) *formulaContext {
+	return &formulaContext{moduleFS: moduleFS, matrix: matrix}
 }
 
 // compareModuleVersion compares two versions of the same module path
@@ -128,7 +130,7 @@ func (c *formulaContext) loadDeps(ctx context.Context, mod module.Version) (deps
 	if err != nil {
 		return nil, err
 	}
-	return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f)
+	return resolveDeps(mod, thisMod.fsys.(fs.ReadFileFS), f, c.matrix)
 }
 
 // convertToModules converts a list of module.Version into loaded Module structs.
@@ -164,7 +166,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 		return nil, err
 	}
 
-	context := newFormulaContext(opts.FormulaStore.ModuleFS)
+	context := newFormulaContext(opts.FormulaStore.ModuleFS, opts.Matrix)
 
 	mainMod, err := context.moduleOf(ctx, main.Path)
 	if err != nil {
@@ -190,7 +192,7 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 	if err != nil {
 		return nil, err
 	}
-	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula)
+	mainDeps, err := resolveDeps(main, mainMod.fsys.(fs.ReadFileFS), mainFormula, context.matrix)
 	if err != nil {
 		return nil, err
 	}
@@ -271,9 +273,16 @@ func Load(ctx context.Context, main module.Version, opts Options) ([]*Module, er
 // resolveDeps resolves the dependencies for a formula.
 // It first tries to get dependencies from the OnRequire callback,
 // then falls back to parsing versions.json if no dependencies are found.
-func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula) ([]module.Version, error) {
+func resolveDeps(mod module.Version, modFS fs.ReadFileFS, frla *formula.Formula, matrix classfile.Matrix) ([]module.Version, error) {
 	if err := validateModulePath(mod.Path); err != nil {
 		return nil, err
+	}
+
+	// XGo formulas read the selected matrix through target.require/options.
+	// Inject before filter and onRequire so both hooks see the same target.
+	injectMatrix(frla, matrix)
+	if frla.Filter != nil && !frla.Filter() {
+		return nil, fmt.Errorf("%s@%s does not support selected matrix", mod.Path, mod.Version)
 	}
 
 	var deps classfile.ModuleDeps

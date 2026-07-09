@@ -44,9 +44,9 @@ func TestGopt_ModuleF_Main(t *testing.T) {
 	if f.modFromVer != "1.0.0" {
 		t.Errorf("FromVer: modFromVer = %q, want %q", f.modFromVer, "1.0.0")
 	}
-	wantDefaults := map[string][]string{"debug": {"OFF"}}
-	if !reflect.DeepEqual(f.target.Defaults, wantDefaults) {
-		t.Errorf("Defaults: defaults = %+v, want %+v", f.target.Defaults, wantDefaults)
+	wantDefaultOptions := map[string][]string{"debug": {"OFF"}}
+	if !reflect.DeepEqual(f.target.DefaultOptions, wantDefaultOptions) {
+		t.Errorf("Defaults: default options = %+v, want %+v", f.target.DefaultOptions, wantDefaultOptions)
 	}
 	if f.fFilter == nil {
 		t.Fatal("Filter: fFilter is nil")
@@ -97,8 +97,8 @@ func TestModuleF_DefaultsSetsTargetOptions(t *testing.T) {
 	f.Defaults(map[string]string{"zlib": "ON"})
 
 	want := []string{"ON"}
-	if got := f.target.Defaults["zlib"]; !reflect.DeepEqual(got, want) {
-		t.Fatalf("Defaults[zlib] = %+v, want %+v", got, want)
+	if got := f.target.DefaultOptions["zlib"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("DefaultOptions[zlib] = %+v, want %+v", got, want)
 	}
 	if got := f.Target().Options()["zlib"]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("target.options[zlib] = %+v, want %+v", got, want)

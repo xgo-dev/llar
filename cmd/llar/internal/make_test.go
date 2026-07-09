@@ -350,7 +350,7 @@ func runMakeCmdStreams(t *testing.T, args ...string) (string, string, error) {
 		makeJSON = origMakeJSON
 	}()
 
-	// Set os.Args to match what Cobra will see, so resolveMatrixStr works.
+	// Set os.Args to match what Cobra will see, so resolveMatrix works.
 	origArgs := os.Args
 	os.Args = append([]string{"llar", "make"}, args...)
 	defer func() { os.Args = origArgs }()
@@ -637,14 +637,18 @@ func setupLocalFormulas(t *testing.T) string {
 	return tmp
 }
 
-// computeMatrixStr returns the same matrix string that runMake computes.
-func computeMatrixStr() string {
-	matrix := formula.Matrix{
+func computeMatrix() formula.Matrix {
+	return formula.Matrix{
 		Require: map[string][]string{
 			"os":   {runtime.GOOS},
 			"arch": {runtime.GOARCH},
 		},
 	}
+}
+
+// computeMatrixStr returns the matrix string derived from the host matrix.
+func computeMatrixStr() string {
+	matrix := computeMatrix()
 	return matrix.Combinations()[0]
 }
 
@@ -819,6 +823,7 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	ctx := context.Background()
 	mods, err := modules.Load(ctx, module.Version{Path: "test/liba", Version: "1.0.0"}, modules.Options{
 		FormulaStore: store,
+		Matrix:       computeMatrix(),
 	})
 	if err != nil {
 		t.Fatalf("modules.Load() failed: %v", err)
@@ -882,7 +887,7 @@ func TestBuildModule_SilentSuccess(t *testing.T) {
 	r, w, _ := os.Pipe()
 	os.Stdout = w
 
-	err := buildModule(context.Background(), store, "test/liba", "1.0.0", matrixStr, false)
+	err := buildModule(context.Background(), store, "test/liba", "1.0.0", computeMatrix(), false)
 
 	w.Close()
 	os.Stdout = old

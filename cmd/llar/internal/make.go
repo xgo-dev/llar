@@ -89,7 +89,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 		makeOutput = abs
 	}
 
-	matrixStr, err := resolveMatrixStr(cmd)
+	matrix, err := resolveMatrix(cmd)
 	if err != nil {
 		return err
 	}
@@ -101,7 +101,7 @@ func runMake(cmd *cobra.Command, args []string) error {
 	}
 
 	if !isLocal {
-		return buildModule(ctx, remoteStore, pattern, version, matrixStr, false)
+		return buildModule(ctx, remoteStore, pattern, version, matrix, false)
 	}
 
 	// Resolve local pattern
@@ -127,24 +127,20 @@ func runMake(cmd *cobra.Command, args []string) error {
 		if ver == "" {
 			ver = version // global @version from arg
 		}
-		if err := buildModule(ctx, store, m.Path, ver, matrixStr, false); err != nil {
+		if err := buildModule(ctx, store, m.Path, ver, matrix, false); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// hostMatrixCombo returns the matrix combination for the current host
-// (os+arch). It is used by both `llar make` and `llar test` to select
-// the default build variant when the user does not specify one.
-func hostMatrixCombo() string {
-	matrix := formula.Matrix{
+func hostMatrix() formula.Matrix {
+	return formula.Matrix{
 		Require: map[string][]string{
 			"os":   {runtime.GOOS},
 			"arch": {runtime.GOARCH},
 		},
 	}
-	return matrix.Combinations()[0]
 }
 
 // buildModule loads and builds a single module. When runTest is true, the
@@ -153,9 +149,10 @@ func hostMatrixCombo() string {
 // dependencies still honor the build cache and do not have their onTest
 // hooks triggered — each dependency is verified by its own
 // `llar test <dep>` invocation.
-func buildModule(ctx context.Context, store repo.Store, modPath, version, matrixStr string, runTest bool) error {
+func buildModule(ctx context.Context, store repo.Store, modPath, version string, matrix formula.Matrix, runTest bool) error {
 	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
 		FormulaStore: store,
+		Matrix:       matrix,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load modules: %w", err)
@@ -172,6 +169,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version, matrix
 		}
 	}()
 
+	matrixStr := matrix.Combinations()[0]
 	buildOpts := build.Options{
 		Store:     store,
 		MatrixStr: matrixStr,
