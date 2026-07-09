@@ -73,21 +73,9 @@ func TestProject_ReadFile(t *testing.T) {
 	})
 }
 
-func TestContext_CurrentMatrix(t *testing.T) {
-	ctx := &Context{}
-	matrix := Matrix{
-		Require: map[string][]string{
-			"os": {"linux"},
-		},
-		Options: map[string][]string{
-			"ssl": {"sslON"},
-		},
-	}
-
-	want := matrix.Combinations()[0]
-	ctx.matrixStr = want
-	if got := ctx.CurrentMatrix(); got != want {
-		t.Fatalf("Context.CurrentMatrix() = %q, want %q", got, want)
+func TestContext_DoesNotExposeCurrentMatrix(t *testing.T) {
+	if _, ok := reflect.TypeOf((*Context)(nil)).MethodByName("CurrentMatrix"); ok {
+		t.Fatal("Context should not expose CurrentMatrix; formula DSL should use target instead")
 	}
 }
 

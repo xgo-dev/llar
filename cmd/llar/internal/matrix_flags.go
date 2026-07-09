@@ -13,19 +13,18 @@ import (
 
 var matrixKeyRE = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.\-]*$`)
 
-// resolveMatrixStr extracts matrix flags from os.Args and returns the
-// encoded matrix string. Falls back to hostMatrixCombo() when no
-// matrix flags are present.
-func resolveMatrixStr(cmd *cobra.Command) (string, error) {
+// resolveMatrix extracts matrix flags from os.Args. Falls back to the host
+// matrix when no matrix flags are present.
+func resolveMatrix(cmd *cobra.Command) (formula.Matrix, error) {
 	depth := len(strings.Fields(cmd.CommandPath()))
 	m, err := extractMatrixFlags(cmd, os.Args[depth:])
 	if err != nil {
-		return "", err
+		return formula.Matrix{}, err
 	}
 	if m == nil {
-		return hostMatrixCombo(), nil
+		return hostMatrix(), nil
 	}
-	return m.Combinations()[0], nil
+	return *m, nil
 }
 
 // extractMatrixFlags uses go-flags to parse registered matrix assignment flags

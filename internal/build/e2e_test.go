@@ -121,9 +121,8 @@ func TestE2E_MatrixVariation(t *testing.T) {
 		main := module.Version{Path: "test/ctxcheck", Version: "1.0.0"}
 		results, _ := loadAndBuild(t, b, store, main)
 
-		// ctxcheck sets metadata to the matrix string
-		if results[0].Metadata != matrix {
-			t.Errorf("matrix=%q: metadata = %q, want %q", matrix, results[0].Metadata, matrix)
+		if results[0].Metadata != "-lctxcheck" {
+			t.Errorf("matrix=%q: metadata = %q, want %q", matrix, results[0].Metadata, "-lctxcheck")
 		}
 	}
 
@@ -231,9 +230,8 @@ func TestE2E_RebuildAfterCacheClear(t *testing.T) {
 // the formula's `onTest` block is parsed via the xgo classfile mechanism,
 // Formula.OnTest is populated by the loader, and Builder.Build invokes it
 // when RunTest is true. The formula's onTest body writes a marker file into
-// ctx.outputDir() whose content is ctx.currentMatrix() — so a passing test
-// proves both that onTest actually ran and that the build Context is wired
-// correctly into the interpreted callback.
+// ctx.outputDir(), so a passing test proves both that onTest actually ran and
+// that the build Context is wired correctly into the interpreted callback.
 func TestE2E_OnTest_SucceedsAndRuns(t *testing.T) {
 	store := setupTestStore(t)
 	b := setupBuilder(t, store, "amd64-linux")
@@ -254,8 +252,8 @@ func TestE2E_OnTest_SucceedsAndRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("onTest stamp missing; OnTest did not run: %v", err)
 	}
-	if string(data) != "amd64-linux" {
-		t.Errorf("stamp content = %q, want %q (ctx.currentMatrix not wired)", data, "amd64-linux")
+	if string(data) != "ran" {
+		t.Errorf("stamp content = %q, want %q", data, "ran")
 	}
 }
 

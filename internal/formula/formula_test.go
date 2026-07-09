@@ -61,6 +61,34 @@ func TestLoadFS(t *testing.T) {
 	})
 }
 
+func TestLoadFS_TargetSurface(t *testing.T) {
+	fsys := os.DirFS("testdata/formula").(fs.ReadFileFS)
+	f, err := LoadFS(fsys, "targetsurface_llar.gox")
+	if err != nil {
+		t.Fatalf("LoadFS failed: %v", err)
+	}
+	if f.OnRequire == nil {
+		t.Fatal("OnRequire is nil")
+	}
+	if f.OnBuild == nil {
+		t.Fatal("OnBuild is nil")
+	}
+	if f.Filter == nil {
+		t.Fatal("Filter is nil")
+	}
+	if !f.Filter() {
+		t.Fatal("Filter() = false, want true")
+	}
+
+	var deps formulapkg.ModuleDeps
+	f.OnRequire(&formulapkg.Project{}, &deps)
+	gotDeps := deps.Deps()
+	if len(gotDeps) != 1 || gotDeps[0].Path != "madler/zlib" || gotDeps[0].Version != "v1.3.1" {
+		t.Fatalf("deps = %+v, want [madler/zlib@v1.3.1]", gotDeps)
+	}
+	f.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+}
+
 func TestFormula_SetStdout(t *testing.T) {
 	formula, err := loadFS(os.DirFS("testdata/formula").(fs.ReadFileFS), "hello_llar.gox")
 	if err != nil {

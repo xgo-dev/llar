@@ -46,7 +46,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 	makeVerbose = testVerbose
 	defer func() { makeVerbose = savedVerbose }()
 
-	matrixStr, err := resolveMatrixStr(cmd)
+	matrix, err := resolveMatrix(cmd)
 	if err != nil {
 		return err
 	}
@@ -57,7 +57,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 
 	if !isLocal {
-		return buildModule(ctx, remoteStore, pattern, version, matrixStr, true)
+		return buildModule(ctx, remoteStore, pattern, version, matrix, true)
 	}
 
 	cwd, err := os.Getwd()
@@ -81,7 +81,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 		if ver == "" {
 			ver = version
 		}
-		if err := buildModule(ctx, store, m.Path, ver, matrixStr, true); err != nil {
+		if err := buildModule(ctx, store, m.Path, ver, matrix, true); err != nil {
 			return err
 		}
 	}

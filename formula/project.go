@@ -57,11 +57,6 @@ func (c *Context) OutputDir__1(mod module.Version) (string, error) {
 	return c.getOutputDir(c.matrixStr, mod)
 }
 
-// CurrentMatrix returns the active build matrix for this context.
-func (c *Context) CurrentMatrix() string {
-	return c.matrixStr
-}
-
 // BuildResult returns the stored build result for the module, if any.
 func (c *Context) BuildResult(mod module.Version) (BuildResult, bool) {
 	r, ok := c.buildResults[mod]

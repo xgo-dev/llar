@@ -26,7 +26,7 @@ func runTestCmd(t *testing.T, args ...string) (string, error) {
 
 	testVerbose = true
 
-	// Set os.Args to match what Cobra will see, so resolveMatrixStr works.
+	// Set os.Args to match what Cobra will see, so resolveMatrix works.
 	origArgs := os.Args
 	os.Args = append([]string{"llar", "test"}, args...)
 	defer func() { os.Args = origArgs }()

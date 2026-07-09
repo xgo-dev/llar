@@ -2,9 +2,11 @@ package internal
 
 import (
 	"os"
+	"reflect"
 	"runtime"
 	"testing"
 
+	"github.com/goplus/llar/formula"
 	"github.com/spf13/cobra"
 )
 
@@ -183,27 +185,41 @@ func TestExtractMatrixFlags_DoubleDashStopsParsing(t *testing.T) {
 	}
 }
 
-func TestResolveMatrixStr_NoFlags(t *testing.T) {
+func TestResolveMatrix_NoFlags(t *testing.T) {
 	cmd := makeCmdForTest()
 	os.Args = []string{"llar", "make", "mod@v1"}
-	got, err := resolveMatrixStr(cmd)
+	got, err := resolveMatrix(cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := runtime.GOARCH + "-" + runtime.GOOS
-	if got != want {
-		t.Fatalf("matrixStr = %q, want host %q", got, want)
+	want := formula.Matrix{
+		Require: map[string][]string{
+			"os":   {runtime.GOOS},
+			"arch": {runtime.GOARCH},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("matrix = %+v, want %+v", got, want)
 	}
 }
 
-func TestResolveMatrixStr_WithFlags(t *testing.T) {
+func TestResolveMatrix_WithFlags(t *testing.T) {
 	cmd := makeCmdForTest()
-	os.Args = []string{"llar", "make", "mod@v1", "--os", "linux", "--arch", "amd64"}
-	got, err := resolveMatrixStr(cmd)
+	os.Args = []string{"llar", "make", "mod@v1", "--os", "linux", "--arch", "amd64", "--option", "ssl=openssl"}
+	got, err := resolveMatrix(cmd)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "amd64-linux" {
-		t.Fatalf("matrixStr = %q, want %q", got, "amd64-linux")
+	want := formula.Matrix{
+		Require: map[string][]string{
+			"os":   {"linux"},
+			"arch": {"amd64"},
+		},
+		Options: map[string][]string{
+			"ssl": {"openssl"},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("matrix = %+v, want %+v", got, want)
 	}
 }

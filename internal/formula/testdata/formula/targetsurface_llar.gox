@@ -1,0 +1,24 @@
+import "slices"
+
+id "test/target"
+
+fromVer "v1.0.0"
+
+defaults {
+	"zlib": "ON",
+}
+
+filter => {
+	return slices.contains(target.options["zlib"], "ON")
+}
+
+onRequire (proj, deps) => {
+	_ = target.require["os"]
+	if slices.contains(target.options["zlib"], "ON") {
+		deps.require "madler/zlib", "v1.3.1"
+	}
+}
+
+onBuild (ctx, proj, out) => {
+	_ = target.options["debug"]
+}

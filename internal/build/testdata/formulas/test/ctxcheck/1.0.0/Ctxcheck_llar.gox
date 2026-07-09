@@ -3,5 +3,5 @@ id "test/ctxcheck"
 fromVer "1.0.0"
 
 onBuild (ctx, proj, out) => {
-	out.setMetadata ctx.currentMatrix()
+	out.setMetadata "-lctxcheck"
 }

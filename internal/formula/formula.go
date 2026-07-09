@@ -31,6 +31,7 @@ type Formula struct {
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
 	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
 	OnTest    func(ctx *formula.Context, proj *formula.Project, out *formula.TestResult)
+	Filter    func() bool
 }
 
 // loadFS is the internal implementation for loading a formula from a filesystem.
@@ -138,6 +139,7 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
 		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
+		Filter:     valueOf(class, "fFilter").(func() bool),
 	}, nil
 }
 

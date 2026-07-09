@@ -14,7 +14,7 @@ onTest (ctx, proj, out) => {
 		out.addErr err
 		return
 	}
-	err = os.writeFile(installDir+"/ontest.stamp", []byte(ctx.currentMatrix()), 0o644)
+	err = os.writeFile(installDir+"/ontest.stamp", []byte("ran"), 0o644)
 	if err != nil {
 		out.addErr err
 	}
