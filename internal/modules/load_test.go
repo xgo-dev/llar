@@ -392,7 +392,6 @@ func TestLoad_InjectsTargetBeforeFilterAndOnRequire(t *testing.T) {
 		FormulaStore: store,
 		Matrix: classfile.Matrix{
 			Require: map[string][]string{"os": {"linux"}},
-			Options: map[string][]string{"ssl": {"openssl"}},
 		},
 	})
 	if err != nil {

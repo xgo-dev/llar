@@ -3,12 +3,19 @@ import "slices"
 id "towner/targetreq"
 fromVer "1.0.0"
 
+defaults {
+	"ssl": "openssl",
+	"debug": "OFF",
+}
+
 filter => {
 	return slices.contains(target.options["ssl"], "openssl")
 }
 
 onRequire (proj, deps) => {
-	if slices.contains(target.require["os"], "linux") && slices.contains(target.options["ssl"], "openssl") {
+	if slices.contains(target.require["os"], "linux") &&
+		slices.contains(target.options["ssl"], "openssl") &&
+		slices.contains(target.options["debug"], "OFF") {
 		deps.require "towner/depmod", "1.0.0"
 	}
 }
