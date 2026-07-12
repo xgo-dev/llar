@@ -5,10 +5,14 @@
 package formula
 
 import (
+	"fmt"
 	"io/fs"
+	"reflect"
 
+	"github.com/goplus/ixgo"
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/mod/module"
+	"golang.org/x/tools/go/ssa"
 )
 
 type probeFS struct{}
@@ -21,7 +25,27 @@ func (probeFS) ReadFile(string) ([]byte, error) {
 	return nil, fs.ErrNotExist
 }
 
-func probeFormula(f *Formula) {
+func probeFormula(ctx *ixgo.Context, pkg *ssa.Package, structName string, tr *tracker) (classfile.Matrix, error) {
+	interp, err := ctx.NewInterp(pkg)
+	if err != nil {
+		return classfile.Matrix{}, err
+	}
+	if err = interp.RunInit(); err != nil {
+		return classfile.Matrix{}, err
+	}
+	typ, ok := interp.GetType(structName)
+	if !ok {
+		return classfile.Matrix{}, fmt.Errorf("failed to load formula: struct name not found: %s", structName)
+	}
+	val := reflect.New(typ)
+	class := val.Elem()
+	val.Interface().(interface{ Main() }).Main()
+	f := &Formula{
+		structElem: class,
+		OnBuild:    valueOf(class, "fOnBuild").(func(*classfile.Context, *classfile.Project, *classfile.BuildResult)),
+		OnRequire:  valueOf(class, "fOnRequire").(func(*classfile.Project, *classfile.ModuleDeps)),
+	}
+
 	originalTarget := valueOf(f.structElem, "target").(classfile.Matrix)
 	// Probe with empty maps because discovery does not require a valid matrix.
 	// A formula may read several independent options while configuring a build:
@@ -57,6 +81,7 @@ func probeFormula(f *Formula) {
 			f.OnBuild(ctx, project, &out)
 		})
 	}
+	return tr.matrix(), nil
 }
 
 func safeProbeCall(call func()) {

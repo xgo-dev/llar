@@ -8,7 +8,11 @@ import (
 	"io/fs"
 	"os"
 	"reflect"
+	"slices"
 	"testing"
+
+	"github.com/goplus/ixgo"
+	"github.com/goplus/ixgo/xgobuild"
 )
 
 func TestLoadFSMatrixTracker(t *testing.T) {
@@ -74,5 +78,49 @@ func TestLoadFSMatrixTracker(t *testing.T) {
 				t.Fatalf("Matrix.Options = %#v, want %#v", f.Matrix.Options, tt.wantOptions)
 			}
 		})
+	}
+}
+
+func TestSSAStateRestore(t *testing.T) {
+	ctx := ixgo.NewContext(0)
+	content, err := os.ReadFile("testdata/formula/matrix_llar.gox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := xgobuild.BuildFile(ctx, "matrix_llar.gox", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := ctx.LoadFile("main.go", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	state := saveSSAState(pkg.Prog)
+	if !newTracker().track(ctx, pkg) {
+		t.Fatal("track returned false")
+	}
+
+	changed := false
+	for block, instrs := range state.blocks {
+		if !slices.Equal(block.Instrs, instrs) {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		t.Fatal("tracker did not change SSA instructions")
+	}
+
+	state.restore()
+	for block, instrs := range state.blocks {
+		if !slices.Equal(block.Instrs, instrs) {
+			t.Fatalf("block %d instructions were not restored", block.Index)
+		}
+	}
+	for value, refs := range state.referrers {
+		if !slices.Equal(*value.Referrers(), refs) {
+			t.Fatalf("referrers for %s were not restored", value.Name())
+		}
 	}
 }
