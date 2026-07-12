@@ -28,6 +28,7 @@ type Formula struct {
 	// 	the method declaration of ModuleF in formula/classfile.go
 	ModPath   string
 	FromVer   string
+	Matrix    formula.Matrix
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
 	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
 	OnTest    func(ctx *formula.Context, proj *formula.Project, out *formula.TestResult)
@@ -94,6 +95,8 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	if err != nil {
 		return nil, err
 	}
+	tr := newTracker()
+	tracked := tr.track(ctx, pkgs)
 
 	// Create a new interpreter for the loaded package
 	interp, err := ctx.NewInterp(pkgs)
@@ -132,7 +135,7 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	val.Interface().(interface{ Main() }).Main()
 
 	// Extract the populated fields from the struct and return the Formula
-	return &Formula{
+	loaded := &Formula{
 		structElem: class,
 		ModPath:    valueOf(class, "modPath").(string),
 		FromVer:    valueOf(class, "modFromVer").(string),
@@ -140,7 +143,12 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 		Filter:     valueOf(class, "fFilter").(func() bool),
-	}, nil
+	}
+	if tracked {
+		probeFormula(loaded)
+	}
+	loaded.Matrix = tr.matrix()
+	return loaded, nil
 }
 
 // LoadFS loads a formula from a filesystem interface.

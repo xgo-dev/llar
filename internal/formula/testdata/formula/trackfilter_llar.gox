@@ -1,0 +1,8 @@
+id "test/track-filter"
+
+fromVer "v1.0.0"
+
+filter => {
+	_ = target.options["filter-only"]
+	return false
+}

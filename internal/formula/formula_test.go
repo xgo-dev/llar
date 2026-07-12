@@ -7,6 +7,7 @@ package formula
 import (
 	"io/fs"
 	"os"
+	"reflect"
 	"testing"
 
 	formulapkg "github.com/goplus/llar/formula"
@@ -79,6 +80,14 @@ func TestLoadFS_TargetSurface(t *testing.T) {
 	if !f.Filter() {
 		t.Fatal("Filter() = false, want true")
 	}
+	wantRequire := map[string][]string{"os": nil}
+	if !reflect.DeepEqual(f.Matrix.Require, wantRequire) {
+		t.Fatalf("Matrix.Require = %#v, want %#v", f.Matrix.Require, wantRequire)
+	}
+	wantOptions := map[string][]string{"debug": nil, "zlib": nil}
+	if !reflect.DeepEqual(f.Matrix.Options, wantOptions) {
+		t.Fatalf("Matrix.Options = %#v, want %#v", f.Matrix.Options, wantOptions)
+	}
 
 	var deps formulapkg.ModuleDeps
 	f.OnRequire(&formulapkg.Project{}, &deps)
@@ -87,6 +96,23 @@ func TestLoadFS_TargetSurface(t *testing.T) {
 		t.Fatalf("deps = %+v, want [madler/zlib@v1.3.1]", gotDeps)
 	}
 	f.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+}
+
+func TestLoadFSProbesMatrixKeys(t *testing.T) {
+	fsys := os.DirFS("testdata/formula").(fs.ReadFileFS)
+	f, err := LoadFS(fsys, "matrix_llar.gox")
+	if err != nil {
+		t.Fatalf("LoadFS failed: %v", err)
+	}
+
+	wantRequire := map[string][]string{"os": nil}
+	if !reflect.DeepEqual(f.Matrix.Require, wantRequire) {
+		t.Fatalf("Matrix.Require = %#v, want %#v", f.Matrix.Require, wantRequire)
+	}
+	wantOptions := map[string][]string{"debug": nil, "ssl": nil}
+	if !reflect.DeepEqual(f.Matrix.Options, wantOptions) {
+		t.Fatalf("Matrix.Options = %#v, want %#v", f.Matrix.Options, wantOptions)
+	}
 }
 
 func TestFormula_SetStdout(t *testing.T) {
