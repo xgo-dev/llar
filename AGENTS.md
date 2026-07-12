@@ -107,69 +107,6 @@ func main() {
 
 3. **Error Handling**: If a file doesn't match any registered classfile pattern (wrong suffix), `BuildFile` returns "undefined" errors for DSL functions
 
-### Classfile `var` Fields
-
-In an XGo classfile, the first top-level `var (...)` declaration is the class
-fields declaration. These names compile into fields on the generated struct,
-not package-level variables. If the fields have initializers, XGo generates an
-`XGo_Init()` method and calls it before the classfile body runs.
-
-Source file `hello_llar.gox`:
-```gox
-var (
-    seen map[string]bool = {}
-)
-
-func mark(key string) {
-    seen[key] = true
-}
-
-id "DaveGamble/cJSON"
-fromVer "v1.0.0"
-
-onRequire (proj, deps) => {
-    mark "zlib"
-}
-```
-
-Generated Go code:
-```go
-package main
-
-import "github.com/goplus/llar/formula"
-
-type hello struct {
-    formula.ModuleF
-    seen map[string]bool
-}
-
-func (this *hello) mark(key string) {
-    this.seen[key] = true
-}
-
-func (this *hello) MainEntry() {
-    this.XGo_Init()
-    this.Id("DaveGamble/cJSON")
-    this.FromVer("v1.0.0")
-    this.OnRequire(func(proj *formula.Project, deps *formula.ModuleDeps) {
-        this.mark("zlib")
-    })
-}
-
-func (this *hello) Main() {
-    formula.Gopt_ModuleF_Main(this)
-}
-
-func (this *hello) XGo_Init() *hello {
-    this.seen = map[string]bool{}
-    return this
-}
-
-func main() {
-    new(hello).Main()
-}
-```
-
 ## Build & Test
 
 ```bash
