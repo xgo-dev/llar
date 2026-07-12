@@ -169,11 +169,10 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		}
 	}()
 
-	matrixStr := matrix.Combinations()[0]
 	buildOpts := build.Options{
-		Store:     store,
-		MatrixStr: matrixStr,
-		RunTest:   runTest,
+		Store:   store,
+		Target:  matrix,
+		RunTest: runTest,
 	}
 	if makeOutput != "" {
 		tmpDir, err := os.MkdirTemp("", "llar-make-*")

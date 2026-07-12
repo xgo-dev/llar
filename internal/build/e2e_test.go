@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
@@ -128,8 +129,8 @@ func TestE2E_MatrixVariation(t *testing.T) {
 
 	// Verify each matrix has its own install directory
 	for _, matrix := range matrices {
-		b := &Builder{workspaceDir: wsDir, matrix: matrix}
-		dir, _ := b.installDir("test/ctxcheck", "1.0.0")
+		b := &Builder{workspaceDir: wsDir}
+		dir, _ := b.installDir("test/ctxcheck", "1.0.0", matrix)
 		if _, err := os.Stat(dir); err != nil {
 			t.Errorf("installDir not created for matrix %q: %v", matrix, err)
 		}
@@ -304,8 +305,10 @@ func TestE2E_RealZlibBuild(t *testing.T) {
 	workspaceDir := t.TempDir()
 
 	b := &Builder{
-		store:        store,
-		matrix:       matrix,
+		store: store,
+		target: classfile.Matrix{Require: map[string][]string{
+			"matrix": {matrix},
+		}},
 		workspaceDir: workspaceDir,
 		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
@@ -333,7 +336,7 @@ func TestE2E_RealZlibBuild(t *testing.T) {
 	}
 
 	// Verify build artifacts exist in installDir
-	installDir, _ := b.installDir("madler/zlib", "v1.3.1")
+	installDir, _ := b.installDir("madler/zlib", "v1.3.1", matrix)
 
 	// Check static library
 	libDir := filepath.Join(installDir, "lib")
@@ -378,8 +381,10 @@ func TestE2E_RealLibpngBuild(t *testing.T) {
 	workspaceDir := t.TempDir()
 
 	b := &Builder{
-		store:        store,
-		matrix:       matrix,
+		store: store,
+		target: classfile.Matrix{Require: map[string][]string{
+			"matrix": {matrix},
+		}},
 		workspaceDir: workspaceDir,
 		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
@@ -427,7 +432,7 @@ func TestE2E_RealLibpngBuild(t *testing.T) {
 	}
 
 	// Verify libpng build artifacts
-	pngInstallDir, _ := b.installDir("pnggroup/libpng", "v1.6.47")
+	pngInstallDir, _ := b.installDir("pnggroup/libpng", "v1.6.47", matrix)
 
 	// Check library
 	libDir := filepath.Join(pngInstallDir, "lib")
@@ -476,8 +481,10 @@ func TestE2E_RealFreetypeBuild(t *testing.T) {
 	workspaceDir := t.TempDir()
 
 	b := &Builder{
-		store:        store,
-		matrix:       matrix,
+		store: store,
+		target: classfile.Matrix{Require: map[string][]string{
+			"matrix": {matrix},
+		}},
 		workspaceDir: workspaceDir,
 		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
@@ -518,7 +525,7 @@ func TestE2E_RealFreetypeBuild(t *testing.T) {
 	t.Logf("freetype metadata (from pkg-config): %s", strings.TrimSpace(ftR.Metadata))
 
 	// Verify freetype build artifacts
-	ftInstallDir, _ := b.installDir("freetype/freetype", "VER-2-13-3")
+	ftInstallDir, _ := b.installDir("freetype/freetype", "VER-2-13-3", matrix)
 
 	// Check library
 	libDir := filepath.Join(ftInstallDir, "lib")

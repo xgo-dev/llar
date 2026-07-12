@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build/cache"
+	internalformula "github.com/goplus/llar/internal/formula"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
@@ -305,8 +307,10 @@ func setupBuilder(t *testing.T, store repo.Store, matrix string) *Builder {
 	t.Helper()
 	workspaceDir := t.TempDir()
 	return &Builder{
-		store:        store,
-		matrix:       matrix,
+		store: store,
+		target: classfile.Matrix{Require: map[string][]string{
+			"matrix": {matrix},
+		}},
 		workspaceDir: workspaceDir,
 		cache:        &localCache{workspaceDir: workspaceDir},
 		newRepo: func(repoPath string) (vcs.Repo, error) {
@@ -351,10 +355,12 @@ type cachePut struct {
 
 type recordingCache struct {
 	hits map[module.Version]cache.Entry
+	gets []cache.Key
 	puts []cachePut
 }
 
 func (c *recordingCache) Get(ctx context.Context, key cache.Key) (cache.Entry, bool, error) {
+	c.gets = append(c.gets, key)
 	if c.hits == nil {
 		return cache.Entry{}, false, nil
 	}
@@ -380,8 +386,11 @@ func TestNewBuilder(t *testing.T) {
 		tmpDir := t.TempDir()
 		store := setupTestStore(t)
 		b, err := NewBuilder(Options{
-			Store:        store,
-			MatrixStr:    "amd64-linux",
+			Store: store,
+			Target: classfile.Matrix{Require: map[string][]string{
+				"arch": {"amd64"},
+				"os":   {"linux"},
+			}},
 			WorkspaceDir: tmpDir,
 		})
 		if err != nil {
@@ -390,8 +399,8 @@ func TestNewBuilder(t *testing.T) {
 		if b.workspaceDir != tmpDir {
 			t.Errorf("workspaceDir = %q, want %q", b.workspaceDir, tmpDir)
 		}
-		if b.matrix != "amd64-linux" {
-			t.Errorf("matrix = %q, want %q", b.matrix, "amd64-linux")
+		if got := b.target.Combinations()[0]; got != "amd64-linux" {
+			t.Errorf("target = %q, want %q", got, "amd64-linux")
 		}
 		if b.store != store {
 			t.Error("store not set correctly")
@@ -403,7 +412,10 @@ func TestNewBuilder(t *testing.T) {
 
 	t.Run("default workspace dir", func(t *testing.T) {
 		b, err := NewBuilder(Options{
-			MatrixStr: "arm64-darwin",
+			Target: classfile.Matrix{Require: map[string][]string{
+				"arch": {"arm64"},
+				"os":   {"darwin"},
+			}},
 		})
 		if err != nil {
 			t.Fatalf("NewBuilder() error = %v", err)
@@ -419,6 +431,94 @@ func TestNewBuilder(t *testing.T) {
 			t.Errorf("workspace dir %q doesn't contain .llar", b.workspaceDir)
 		}
 	})
+}
+
+func TestIntersect(t *testing.T) {
+	values := map[string][]string{
+		"debug":  {"ON"},
+		"shared": {"OFF"},
+		"ssl":    {"openssl"},
+	}
+	keys := map[string][]string{
+		"debug": nil,
+		"ssl":   nil,
+	}
+
+	got := intersect(values, keys)
+	want := map[string][]string{
+		"debug": {"ON"},
+		"ssl":   {"openssl"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("intersect() = %#v, want %#v", got, want)
+	}
+}
+
+func TestIntersect_NoMatch(t *testing.T) {
+	got := intersect(map[string][]string{"shared": {"OFF"}}, nil)
+	if got != nil {
+		t.Fatalf("intersect() = %#v, want nil", got)
+	}
+}
+
+func TestBuild_UsesTargetIntersectionForCache(t *testing.T) {
+	store := setupTestStore(t)
+	modVer := module.Version{Path: "test/liba", Version: "1.0.0"}
+	recording := &recordingCache{
+		hits: map[module.Version]cache.Entry{modVer: {Metadata: "-lA"}},
+	}
+	b := &Builder{
+		store: store,
+		target: classfile.Matrix{
+			Require: map[string][]string{
+				"arch": {"amd64"},
+				"os":   {"linux"},
+			},
+			Options: map[string][]string{
+				"debug":  {"ON"},
+				"shared": {"OFF"},
+			},
+		},
+		workspaceDir: t.TempDir(),
+		cache:        recording,
+	}
+	targets := []*modules.Module{{
+		Formula: &internalformula.Formula{Matrix: classfile.Matrix{
+			Options: map[string][]string{"debug": nil},
+		}},
+		Path:    modVer.Path,
+		Version: modVer.Version,
+	}}
+
+	if _, err := b.Build(context.Background(), targets); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(recording.gets) != 1 {
+		t.Fatalf("cache gets = %d, want 1", len(recording.gets))
+	}
+	if got, want := recording.gets[0].Matrix, "amd64-linux|ON"; got != want {
+		t.Fatalf("cache matrix = %q, want %q", got, want)
+	}
+}
+
+func TestBuild_RejectsTargetWithoutIntersection(t *testing.T) {
+	b := &Builder{
+		target: classfile.Matrix{
+			Options: map[string][]string{"shared": {"OFF"}},
+		},
+	}
+	targets := []*modules.Module{{
+		Formula: &internalformula.Formula{Matrix: classfile.Matrix{
+			Options: map[string][]string{"debug": nil},
+		}},
+		Path:    "test/liba",
+		Version: "1.0.0",
+	}}
+
+	_, err := b.Build(context.Background(), targets)
+	if err == nil {
+		t.Fatal("Build() error = nil, want target intersection error")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -964,7 +1064,7 @@ func TestBuild_InstallDirConvention(t *testing.T) {
 	main := module.Version{Path: "test/liba", Version: "1.0.0"}
 	loadAndBuild(t, b, store, main)
 
-	installDir, _ := b.installDir("test/liba", "1.0.0")
+	installDir, _ := b.installDir("test/liba", "1.0.0", "amd64-linux")
 
 	// Verify the path follows workspace/<escaped>@<version>-<matrix>
 	rel, err := filepath.Rel(b.workspaceDir, installDir)

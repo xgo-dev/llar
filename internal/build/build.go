@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,7 @@ import (
 
 type Builder struct {
 	store        repo.Store
-	matrix       string
+	target       classfile.Matrix
 	runTest      bool
 	workspaceDir string
 	cache        cache.Cache
@@ -32,8 +33,8 @@ type Result struct {
 }
 
 type Options struct {
-	Store     repo.Store
-	MatrixStr string
+	Store  repo.Store
+	Target classfile.Matrix
 	// RunTest, when true, causes Build to invoke OnTest on the root target
 	// after OnBuild (or after reusing cached build metadata). The build
 	// cache is consulted as usual: on a cache hit the root's OnBuild is
@@ -75,12 +76,25 @@ func NewBuilder(opts Options) (*Builder, error) {
 	}
 	return &Builder{
 		store:        opts.Store,
-		matrix:       opts.MatrixStr,
+		target:       opts.Target,
 		runTest:      opts.RunTest,
 		workspaceDir: workspaceDir,
 		cache:        c,
 		newRepo:      vcs.NewRepo,
 	}, nil
+}
+
+func intersect(values, keys map[string][]string) map[string][]string {
+	intersection := make(map[string][]string)
+	for key, value := range values {
+		if _, ok := keys[key]; ok {
+			intersection[key] = value
+		}
+	}
+	if len(intersection) == 0 {
+		return nil
+	}
+	return intersection
 }
 
 // constructBuildList reorders the MVS build list into a valid build order
@@ -213,6 +227,16 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	}
 
 	build := func(mod *modules.Module) (Result, error) {
+		modVer := module.Version{Path: mod.Path, Version: mod.Version}
+		target := classfile.Matrix{
+			Require: maps.Clone(b.target.Require),
+			Options: intersect(b.target.Options, mod.Formula.Matrix.Options),
+		}
+		combinations := target.Combinations()
+		if len(combinations) == 0 {
+			return Result{}, fmt.Errorf("%s@%s has no matrix dimensions matching target", mod.Path, mod.Version)
+		}
+		targetStr := combinations[0]
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
 		testThisMod := b.runTest && isRoot && mod.OnTest != nil
 
@@ -222,17 +246,16 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer unlock()
 
-		installDir, err := b.installDir(mod.Path, mod.Version)
+		installDir, err := b.installDir(mod.Path, mod.Version, targetStr)
 		if err != nil {
 			return Result{}, err
 		}
 		deps := b.resolveModTransitiveDeps(targets, mod)
-		modVer := module.Version{Path: mod.Path, Version: mod.Version}
 
 		// Consult the build cache. A hit means we already have the
 		// module's build metadata and its installDir is populated from a
 		// previous successful build.
-		entry, cacheHit, err := b.cache.Get(ctx, cache.Key{Module: modVer, Matrix: b.matrix})
+		entry, cacheHit, err := b.cache.Get(ctx, cache.Key{Module: modVer, Matrix: targetStr})
 		if err != nil {
 			return Result{}, err
 		}
@@ -270,9 +293,23 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 
 		getOutputDir := func(_ string, m module.Version) (string, error) {
-			return b.installDir(m.Path, m.Version)
+			for _, dep := range targets {
+				if dep.Path != m.Path || dep.Version != m.Version {
+					continue
+				}
+				target := classfile.Matrix{
+					Require: maps.Clone(b.target.Require),
+					Options: intersect(b.target.Options, dep.Formula.Matrix.Options),
+				}
+				combinations := target.Combinations()
+				if len(combinations) == 0 {
+					return "", fmt.Errorf("%s@%s has no matrix dimensions matching target", m.Path, m.Version)
+				}
+				return b.installDir(m.Path, m.Version, combinations[0])
+			}
+			return "", fmt.Errorf("target not found for %s@%s", m.Path, m.Version)
 		}
-		buildContext := classfile.NewContext(tmpSourceDir, installDir, b.matrix, getOutputDir)
+		buildContext := classfile.NewContext(tmpSourceDir, installDir, targetStr, getOutputDir)
 
 		// Inject results of already-built dependencies
 		for modVer, result := range builtResults {
@@ -313,7 +350,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// Save cache only on cache miss. A cache hit means the entry is
 		// already present and current; OnTest does not modify metadata.
 		if !cacheHit {
-			entry, err := b.cache.Put(ctx, cache.Key{Module: modVer, Matrix: b.matrix}, os.DirFS(installDir), cache.Entry{
+			entry, err := b.cache.Put(ctx, cache.Key{Module: modVer, Matrix: targetStr}, os.DirFS(installDir), cache.Entry{
 				Metadata: metadata,
 				Deps:     deps,
 			})

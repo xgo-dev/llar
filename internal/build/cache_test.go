@@ -97,9 +97,9 @@ func TestBuildCache_Overwrite(t *testing.T) {
 }
 
 func TestBuilder_InstallDir(t *testing.T) {
-	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
+	b := &Builder{workspaceDir: "/tmp/ws"}
 
-	dir, err := b.installDir("madler/zlib", "1.0.0")
+	dir, err := b.installDir("madler/zlib", "1.0.0", "amd64-linux")
 	if err != nil {
 		t.Fatalf("installDir() failed: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestBuilder_InstallDir(t *testing.T) {
 }
 
 func TestBuilder_CacheDir(t *testing.T) {
-	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
+	b := &Builder{workspaceDir: "/tmp/ws"}
 
 	dir, err := b.cacheDir("madler/zlib")
 	if err != nil {
@@ -124,7 +124,7 @@ func TestBuilder_CacheDir(t *testing.T) {
 
 func TestBuilder_SaveLoadCache(t *testing.T) {
 	tmpDir := t.TempDir()
-	b := &Builder{workspaceDir: tmpDir, matrix: "amd64-linux"}
+	b := &Builder{workspaceDir: tmpDir}
 	now := time.Now().Truncate(time.Second)
 
 	original := &buildCache{}
@@ -188,7 +188,7 @@ func TestBuilder_SaveLoadCache(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuilder_CacheDir_InvalidPath(t *testing.T) {
-	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
+	b := &Builder{workspaceDir: "/tmp/ws"}
 
 	// Empty path should fail EscapePath (filepath.Localize)
 	_, err := b.cacheDir("")
@@ -210,14 +210,14 @@ func TestBuilder_CacheDir_InvalidPath(t *testing.T) {
 }
 
 func TestBuilder_InstallDir_InvalidPath(t *testing.T) {
-	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
+	b := &Builder{workspaceDir: "/tmp/ws"}
 
-	_, err := b.installDir("", "1.0.0")
+	_, err := b.installDir("", "1.0.0", "amd64-linux")
 	if err == nil {
 		t.Fatal("installDir('', ...) should fail")
 	}
 
-	_, err = b.installDir("/abs/path", "1.0.0")
+	_, err = b.installDir("/abs/path", "1.0.0", "amd64-linux")
 	if err == nil {
 		t.Fatal("installDir('/abs/path', ...) should fail")
 	}
@@ -225,7 +225,7 @@ func TestBuilder_InstallDir_InvalidPath(t *testing.T) {
 
 func TestBuilder_LoadCache_InvalidPath(t *testing.T) {
 	tmpDir := t.TempDir()
-	b := &Builder{workspaceDir: tmpDir, matrix: "amd64-linux"}
+	b := &Builder{workspaceDir: tmpDir}
 
 	_, err := b.loadCache("")
 	if err == nil {
@@ -235,7 +235,7 @@ func TestBuilder_LoadCache_InvalidPath(t *testing.T) {
 
 func TestBuilder_SaveCache_InvalidPath(t *testing.T) {
 	tmpDir := t.TempDir()
-	b := &Builder{workspaceDir: tmpDir, matrix: "amd64-linux"}
+	b := &Builder{workspaceDir: tmpDir}
 
 	cache := &buildCache{}
 	cache.set("1.0.0", "amd64-linux", &buildEntry{BuildTime: time.Now()})
@@ -247,11 +247,11 @@ func TestBuilder_SaveCache_InvalidPath(t *testing.T) {
 }
 
 func TestBuilder_InstallDir_DifferentMatrices(t *testing.T) {
-	b1 := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
-	b2 := &Builder{workspaceDir: "/tmp/ws", matrix: "arm64-darwin"}
+	b1 := &Builder{workspaceDir: "/tmp/ws"}
+	b2 := &Builder{workspaceDir: "/tmp/ws"}
 
-	dir1, _ := b1.installDir("test/lib", "1.0.0")
-	dir2, _ := b2.installDir("test/lib", "1.0.0")
+	dir1, _ := b1.installDir("test/lib", "1.0.0", "amd64-linux")
+	dir2, _ := b2.installDir("test/lib", "1.0.0", "arm64-darwin")
 
 	if dir1 == dir2 {
 		t.Errorf("same installDir for different matrices: %q", dir1)
@@ -265,10 +265,10 @@ func TestBuilder_InstallDir_DifferentMatrices(t *testing.T) {
 }
 
 func TestBuilder_InstallDir_DifferentVersions(t *testing.T) {
-	b := &Builder{workspaceDir: "/tmp/ws", matrix: "amd64-linux"}
+	b := &Builder{workspaceDir: "/tmp/ws"}
 
-	dir1, _ := b.installDir("test/lib", "1.0.0")
-	dir2, _ := b.installDir("test/lib", "2.0.0")
+	dir1, _ := b.installDir("test/lib", "1.0.0", "amd64-linux")
+	dir2, _ := b.installDir("test/lib", "2.0.0", "amd64-linux")
 
 	if dir1 == dir2 {
 		t.Errorf("same installDir for different versions: %q", dir1)
@@ -277,7 +277,7 @@ func TestBuilder_InstallDir_DifferentVersions(t *testing.T) {
 
 func TestBuilder_SaveCache_CreatesDir(t *testing.T) {
 	tmpDir := t.TempDir()
-	b := &Builder{workspaceDir: tmpDir, matrix: "amd64-linux"}
+	b := &Builder{workspaceDir: tmpDir}
 
 	cache := &buildCache{}
 	cache.set("1.0.0", "amd64-linux", &buildEntry{
