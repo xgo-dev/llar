@@ -1,0 +1,77 @@
+type namedOptions map[string][]string
+
+type aliasedOptions = map[string][]string
+
+type matrixHolder struct {
+	values map[string][]string
+}
+
+func matrixLookup(values map[string][]string, key string) []string {
+	return values[key]
+}
+
+func matrixPassthrough(values map[string][]string) map[string][]string {
+	return values
+}
+
+func dynamicMatrixKey() string {
+	return "dynamic"
+}
+
+id "test/track-cases"
+
+fromVer "v1.0.0"
+
+onRequire (proj, deps) => {
+	_ = target.require["direct-require"]
+
+	require := target.require
+	_ = matrixLookup(require, "helper-require")
+	_ = require["same"]
+
+	unrelated := map[string][]string{"ignored-require": []string{"value"}}
+	_ = matrixLookup(unrelated, "ignored-require")
+}
+
+onBuild (ctx, proj, out) => {
+	_ = target.options["direct-option"]
+
+	options := target.options
+	alias := options
+	_ = alias["alias"]
+	_ = alias["alias"]
+	_ = matrixLookup(options, "helper-option")
+	_ = matrixLookup(matrixPassthrough(options), "returned")
+
+	named := namedOptions(options)
+	_ = named["named"]
+	aliased := aliasedOptions(options)
+	_ = aliased["type-alias"]
+
+	optionsPtr := &options
+	_ = (*optionsPtr)["pointer"]
+
+	key := dynamicMatrixKey()
+	_ = options[key]
+
+	_, ok := options["comma-ok"]
+	_ = ok
+
+	holder := matrixHolder{values: options}
+	_ = holder.values["struct"]
+
+	var boxed any = options
+	fromInterface := boxed.(map[string][]string)
+	_ = fromInterface["interface"]
+
+	func() {
+		_ = options["closure"]
+	}()
+
+	_ = options["same"]
+
+	unrelated := map[string][]string{"ignored-option": []string{"value"}}
+	_ = matrixLookup(unrelated, "ignored-option")
+	var nilMap map[string][]string
+	_ = nilMap["ignored-nil"]
+}

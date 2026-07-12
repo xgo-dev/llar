@@ -10,11 +10,14 @@ import (
 	"io/fs"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
 	"github.com/goplus/llar/formula"
+	"golang.org/x/tools/go/ssa"
+	"golang.org/x/tools/go/ssa/ssautil"
 
 	_ "github.com/goplus/llar/internal/ixgo"
 )
@@ -28,10 +31,57 @@ type Formula struct {
 	// 	the method declaration of ModuleF in formula/classfile.go
 	ModPath   string
 	FromVer   string
+	Matrix    formula.Matrix
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
 	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
 	OnTest    func(ctx *formula.Context, proj *formula.Project, out *formula.TestResult)
 	Filter    func() bool
+}
+
+type ssaState struct {
+	blocks    map[*ssa.BasicBlock][]ssa.Instruction
+	referrers map[ssa.Value][]ssa.Instruction
+}
+
+func saveSSAState(prog *ssa.Program) ssaState {
+	state := ssaState{
+		blocks:    make(map[*ssa.BasicBlock][]ssa.Instruction),
+		referrers: make(map[ssa.Value][]ssa.Instruction),
+	}
+	for fn := range ssautil.AllFunctions(prog) {
+		for _, block := range fn.Blocks {
+			state.blocks[block] = slices.Clone(block.Instrs)
+			for _, instr := range block.Instrs {
+				if value, ok := instr.(ssa.Value); ok {
+					state.saveReferrers(value)
+				}
+				for _, operand := range instr.Operands(nil) {
+					if operand != nil && *operand != nil {
+						state.saveReferrers(*operand)
+					}
+				}
+			}
+		}
+	}
+	return state
+}
+
+func (s ssaState) saveReferrers(value ssa.Value) {
+	if _, ok := s.referrers[value]; ok {
+		return
+	}
+	if refs := value.Referrers(); refs != nil {
+		s.referrers[value] = slices.Clone(*refs)
+	}
+}
+
+func (s ssaState) restore() {
+	for block, instrs := range s.blocks {
+		block.Instrs = instrs
+	}
+	for value, refs := range s.referrers {
+		*value.Referrers() = refs
+	}
 }
 
 // loadFS is the internal implementation for loading a formula from a filesystem.
@@ -94,8 +144,30 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	if err != nil {
 		return nil, err
 	}
+	state := saveSSAState(pkgs.Prog)
+	tr := newTracker()
+	tracked := tr.track(ctx, pkgs)
 
-	// Create a new interpreter for the loaded package
+	// Extract struct name from filename: "hello_llar.gox" -> "hello"
+	// The classfile mechanism generates a struct with this name
+	structName, _, ok := strings.Cut(filepath.Base(path), "_")
+	if !ok {
+		return nil, fmt.Errorf("failed to load formula: file name is not valid: %s", path)
+	}
+
+	var matrix formula.Matrix
+	if tracked {
+		matrix, err = probeFormula(ctx, pkgs, structName, tr)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// NewInterp translates SSA eagerly. The probe interpreter retains the
+	// instrumented instructions, while the production interpreter below sees
+	// the original SSA restored from this snapshot.
+	state.restore()
+
 	interp, err := ctx.NewInterp(pkgs)
 	if err != nil {
 		return nil, err
@@ -104,13 +176,6 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	// Run package-level init functions
 	if err = interp.RunInit(); err != nil {
 		return nil, err
-	}
-
-	// Extract struct name from filename: "hello_llar.gox" -> "hello"
-	// The classfile mechanism generates a struct with this name
-	structName, _, ok := strings.Cut(filepath.Base(path), "_")
-	if !ok {
-		return nil, fmt.Errorf("failed to load formula: file name is not valid: %s", path)
 	}
 
 	// Get the generated struct type from the interpreter
@@ -136,6 +201,7 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 		structElem: class,
 		ModPath:    valueOf(class, "modPath").(string),
 		FromVer:    valueOf(class, "modFromVer").(string),
+		Matrix:     matrix,
 		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
 		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),

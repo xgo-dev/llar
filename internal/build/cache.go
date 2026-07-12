@@ -70,12 +70,12 @@ func (c *localCache) cacheDir(modPath string) (string, error) {
 }
 
 // installDir returns the build output directory: workspaceDir/<escapedPath>@<version>-<matrix>.
-func (b *Builder) installDir(modPath, version string) (string, error) {
+func (b *Builder) installDir(modPath, version, target string) (string, error) {
 	escaped, err := module.EscapePath(modPath)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(b.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, version, b.matrix)), nil
+	return filepath.Join(b.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, version, target)), nil
 }
 
 // loadCache reads the cache file for a module from the workspace directory.

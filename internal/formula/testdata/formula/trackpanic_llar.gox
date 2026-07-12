@@ -1,0 +1,12 @@
+id "test/track-panic"
+
+fromVer "v1.0.0"
+
+onRequire (proj, deps) => {
+	_ = target.options["before-panic"]
+	panic("stop require probe")
+}
+
+onBuild (ctx, proj, out) => {
+	_ = target.options["after-panic"]
+}

@@ -1,0 +1,20 @@
+func lookup(values map[string][]string, key string) []string {
+	return values[key]
+}
+
+id "test/matrix"
+
+fromVer "v1.0.0"
+
+onRequire (proj, deps) => {
+	require := target.require
+	if len(lookup(require, "os")) == 0 {
+		options := target.options
+		_ = lookup(options, "ssl")
+	}
+}
+
+onBuild (ctx, proj, out) => {
+	options := target.options
+	_ = len(lookup(options, "debug"))
+}
