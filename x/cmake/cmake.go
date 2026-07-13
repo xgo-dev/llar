@@ -3,10 +3,11 @@ package cmake
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
+
+	"github.com/goplus/llar/internal/execbroker"
 )
 
 type defineValue struct {
@@ -157,9 +158,13 @@ func (c *CMake) OutputDir() string {
 }
 
 func (c *CMake) run(name string, args []string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd := execbroker.Command(name, args...)
+	if cmd.Stdout == nil {
+		cmd.Stdout = os.Stdout
+	}
+	if cmd.Stderr == nil {
+		cmd.Stderr = os.Stderr
+	}
 	return cmd.Run()
 }
 

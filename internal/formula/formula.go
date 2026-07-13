@@ -16,6 +16,7 @@ import (
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
 	"github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/execbroker"
 	llarixgo "github.com/goplus/llar/internal/ixgo"
 )
 
@@ -86,6 +87,8 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	// Formula types remain cached after loading, so later interpreters must not
 	// reset the dynamic method slots used by earlier types.
 	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
+	ctx.RegisterExternal("os/exec.Command", execbroker.Command)
+	ctx.RegisterExternal("os/exec.CommandContext", execbroker.CommandContext)
 
 	// Read the raw DSL content from the .gox file
 	content, err := fs.ReadFile(path)
