@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -22,6 +23,8 @@ type Builder struct {
 	store        repo.Store
 	matrix       string
 	runTest      bool
+	stdout       io.Writer
+	stderr       io.Writer
 	workspaceDir string
 	cache        cache.Cache
 	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
@@ -43,6 +46,8 @@ type Options struct {
 	// Transitive dependencies honor the cache normally and do not have
 	// their OnTest hooks triggered.
 	RunTest      bool
+	Stdout       io.Writer
+	Stderr       io.Writer
 	WorkspaceDir string
 	Cache        cache.Cache
 }
@@ -74,10 +79,20 @@ func NewBuilder(opts Options) (*Builder, error) {
 	if c == nil {
 		c = &localCache{workspaceDir: workspaceDir}
 	}
+	stdout := opts.Stdout
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	stderr := opts.Stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
 	return &Builder{
 		store:        opts.Store,
 		matrix:       opts.MatrixStr,
 		runTest:      opts.RunTest,
+		stdout:       stdout,
+		stderr:       stderr,
 		workspaceDir: workspaceDir,
 		cache:        c,
 		newRepo:      vcs.NewRepo,
@@ -214,6 +229,9 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	}
 
 	build := func(mod *modules.Module) (Result, error) {
+		mod.SetStdout(b.stdout)
+		mod.SetStderr(b.stderr)
+
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
 		testThisMod := b.runTest && isRoot && mod.OnTest != nil
 
@@ -283,8 +301,10 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 		var metadata string
 		if err := execbroker.Do(execbroker.Scope{
-			Dir:   tmpSourceDir,
-			Stdin: os.Stdin,
+			Dir:    tmpSourceDir,
+			Stdin:  os.Stdin,
+			Stdout: b.stdout,
+			Stderr: b.stderr,
 		}, func() error {
 			// Run OnBuild only on cache miss; reuse cached metadata otherwise.
 			if cacheHit {

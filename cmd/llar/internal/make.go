@@ -158,22 +158,15 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		return fmt.Errorf("failed to load modules: %w", err)
 	}
 
-	restoreOutput, err := redirectBuildOutput(mods)
-	if err != nil {
-		return err
-	}
-	outputRestored := false
-	defer func() {
-		if !outputRestored {
-			restoreOutput()
-		}
-	}()
+	buildOutput := buildOutputWriter()
 
 	matrixStr := matrix.Combinations()[0]
 	buildOpts := build.Options{
 		Store:     store,
 		MatrixStr: matrixStr,
 		RunTest:   runTest,
+		Stdout:    buildOutput,
+		Stderr:    buildOutput,
 	}
 	if makeOutput != "" {
 		tmpDir, err := os.MkdirTemp("", "llar-make-*")
@@ -193,10 +186,6 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 	if err != nil {
 		return fmt.Errorf("failed to build %s@%s: %w", modPath, version, err)
 	}
-
-	// Restore stdout before printing results.
-	restoreOutput()
-	outputRestored = true
 
 	if len(results) > 0 {
 		main := results[len(results)-1]
@@ -228,39 +217,11 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 	return nil
 }
 
-// redirectBuildOutput reserves command stdout for final metadata. In verbose
-// mode, build stdout is redirected to stderr; in silent mode, build output is
-// discarded until the metadata line is printed.
-func redirectBuildOutput(mods []*modules.Module) (func(), error) {
-	if !makeVerbose {
-		for _, mod := range mods {
-			mod.SetStdout(io.Discard)
-			mod.SetStderr(io.Discard)
-		}
-
-		savedStdout := os.Stdout
-		savedStderr := os.Stderr
-		devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open devnull: %w", err)
-		}
-		os.Stdout = devNull
-		os.Stderr = devNull
-		return func() {
-			os.Stdout = savedStdout
-			os.Stderr = savedStderr
-			_ = devNull.Close()
-		}, nil
+func buildOutputWriter() io.Writer {
+	if makeVerbose {
+		return os.Stderr
 	}
-
-	savedStdout := os.Stdout
-	os.Stdout = os.Stderr
-	for _, mod := range mods {
-		mod.SetStdout(os.Stderr)
-	}
-	return func() {
-		os.Stdout = savedStdout
-	}, nil
+	return io.Discard
 }
 
 // parseModuleArg parses a module argument and detects local filesystem patterns.

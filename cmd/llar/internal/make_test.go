@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/mod/module"
@@ -355,10 +356,9 @@ func runMakeCmdStreams(t *testing.T, args ...string) (string, string, error) {
 	os.Args = append([]string{"llar", "make"}, args...)
 	defer func() { os.Args = origArgs }()
 
-	// Execute rootCmd in-process to keep test coverage. Because build output
-	// flows through process-wide os.Stdout/os.Stderr (including nested build
-	// commands), redirect to pipes and drain concurrently to avoid blocking on
-	// full pipe buffers.
+	// Execute rootCmd in-process to keep test coverage. Capture command output
+	// streams with pipes and drain them concurrently to avoid blocking on full
+	// pipe buffers.
 	oldStdout := os.Stdout
 	stdoutR, stdoutW, _ := os.Pipe()
 	os.Stdout = stdoutW
@@ -821,9 +821,11 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	formulaDir := setupLocalFormulas(t)
 	store := repo.New(formulaDir, &noopVCSRepo{})
 	ctx := context.Background()
+	matrix := computeMatrix()
+	matrixStr := matrix.Combinations()[0]
 	mods, err := modules.Load(ctx, module.Version{Path: "test/liba", Version: "1.0.0"}, modules.Options{
 		FormulaStore: store,
-		Matrix:       computeMatrix(),
+		Matrix:       matrix,
 	})
 	if err != nil {
 		t.Fatalf("modules.Load() failed: %v", err)
@@ -834,21 +836,29 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	t.Cleanup(func() { makeVerbose = savedVerbose })
 
 	stdout, stderr, restore := captureProcessStreams(t)
-	restoreBuildOutput, err := redirectBuildOutput(mods)
+	workspaceDir := t.TempDir()
+	prepopulateCache(t, workspaceDir, "test/liba", "1.0.0", matrixStr, "-lA")
+	builder, err := build.NewBuilder(build.Options{
+		Store:        store,
+		MatrixStr:    matrixStr,
+		WorkspaceDir: workspaceDir,
+		Stdout:       buildOutputWriter(),
+		Stderr:       buildOutputWriter(),
+	})
 	if err != nil {
-		t.Fatalf("redirectBuildOutput() failed: %v", err)
+		t.Fatalf("build.NewBuilder() failed: %v", err)
+	}
+	if _, err := builder.Build(ctx, mods); err != nil {
+		t.Fatalf("Build() failed: %v", err)
 	}
 
 	var out formula.BuildResult
 	mods[0].OnBuild(nil, nil, &out)
-
-	restoreBuildOutput()
 	restore()
 
 	if out.Metadata() != "-lA" {
 		t.Fatalf("metadata = %q, want %q", out.Metadata(), "-lA")
 	}
-
 	if got := strings.TrimSpace(stdout.String()); got != "" {
 		t.Fatalf("stdout = %q, want no build output", got)
 	}
@@ -868,8 +878,7 @@ func TestBuildModule_SilentSuccess(t *testing.T) {
 	matrixStr := computeMatrixStr()
 	prepopulateCache(t, workspaceDir, "test/liba", "1.0.0", matrixStr, "-lA")
 
-	// Silent mode: buildModule redirects os.Stdout to /dev/null,
-	// then restores before printing metadata
+	// Silent mode discards build output while preserving metadata stdout.
 	savedJSON := makeJSON
 	makeVerbose = false
 	makeOutput = ""

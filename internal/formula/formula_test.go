@@ -192,7 +192,15 @@ func TestFormula_SetStdout(t *testing.T) {
 	}
 	var buf []byte
 	formula.SetStdout(&mockWriter{buf: &buf})
+	formula.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+	if got, want := string(buf), "hello\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
 	formula.SetStdout(nil)
+	formula.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+	if got, want := string(buf), "hello\n"; got != want {
+		t.Fatalf("stdout after SetStdout(nil) = %q, want %q", got, want)
+	}
 }
 
 func TestFormula_SetStderr(t *testing.T) {
