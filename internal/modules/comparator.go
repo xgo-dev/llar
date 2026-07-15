@@ -5,14 +5,19 @@ import (
 	"io/fs"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"unsafe"
 
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
-	_ "github.com/goplus/llar/internal/ixgo"
+	llarixgo "github.com/goplus/llar/internal/ixgo"
 	"github.com/goplus/llar/mod/module"
 )
+
+type comparatorProgram struct {
+	typ reflect.Type
+}
 
 // loadComparator loads a version comparator from a .gox file at the given path.
 // Returns an error if the file cannot be loaded or parsed.
@@ -22,7 +27,11 @@ import (
 //   - zero if v1 == v2
 //   - a positive value if v1 > v2
 func loadComparatorFS(fs fs.ReadFileFS, path string) (comparator func(v1, v2 module.Version) int, err error) {
-	ctx := ixgo.NewContext(0)
+	llarixgo.LockInterp()
+	defer llarixgo.UnlockInterp()
+
+	// Loading a comparator must not reset method slots owned by cached formulas.
+	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
 
 	content, err := fs.ReadFile(path)
 	if err != nil {
@@ -41,6 +50,8 @@ func loadComparatorFS(fs fs.ReadFileFS, path string) (comparator func(v1, v2 mod
 	if err != nil {
 		return nil, err
 	}
+	program := &comparatorProgram{}
+	runtime.AddCleanup(program, llarixgo.ReleaseInterp, interp)
 	if err = interp.RunInit(); err != nil {
 		return nil, err
 	}
@@ -52,12 +63,18 @@ func loadComparatorFS(fs fs.ReadFileFS, path string) (comparator func(v1, v2 mod
 	if !ok {
 		return nil, fmt.Errorf("failed to load: struct name not found: %s", structName)
 	}
+	program.typ = typ
 	val := reflect.New(typ)
 	class := val.Elem()
 
 	val.Interface().(interface{ Main() }).Main()
 
-	return valueOf(class, "fCompareVer").(func(v1, v2 module.Version) int), nil
+	compare := valueOf(class, "fCompareVer").(func(v1, v2 module.Version) int)
+	return func(v1, v2 module.Version) int {
+		result := compare(v1, v2)
+		runtime.KeepAlive(program)
+		return result
+	}, nil
 }
 
 // unexportValueOf creates a reflect.Value that allows access to unexported fields.

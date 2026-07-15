@@ -2,12 +2,15 @@ package modules
 
 import (
 	"context"
+	"fmt"
 	"go/token"
 	"io/fs"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/goplus/ixgo/xgobuild"
+	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
@@ -107,13 +110,68 @@ func TestFormulaModule_At(t *testing.T) {
 		t.Errorf("FromVer = %q, want %q", f.FromVer, "v1.5.0")
 	}
 
-	// Test caching
+	// The compiled formula is cached, while callers receive independent classes.
 	f2, err := mod.at("v1.7.18")
 	if err != nil {
 		t.Fatalf("second at() failed: %v", err)
 	}
-	if f != f2 {
-		t.Error("at() did not return cached formula")
+	if f == f2 {
+		t.Error("at() returned the cached formula class")
+	}
+	if len(mod.formulas) != 1 {
+		t.Fatalf("cached formulas = %d, want 1", len(mod.formulas))
+	}
+}
+
+func TestFormulaModule_AtReturnsIsolatedClasses(t *testing.T) {
+	mod := newFormulaModule(os.DirFS("testdata/load/towner/targetreq"), "towner/targetreq")
+
+	const workers = 32
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			f, err := mod.at("1.0.0")
+			if err != nil {
+				errs <- err
+				return
+			}
+			ssl := "securetransport"
+			want := false
+			wantDeps := 0
+			if i%2 == 0 {
+				ssl = "openssl"
+				want = true
+				wantDeps = 1
+			}
+			injectMatrix(f, classfile.Matrix{
+				Require: map[string][]string{"os": {"linux"}},
+				Options: map[string][]string{"ssl": {ssl}},
+			})
+			if got := f.Filter(); got != want {
+				errs <- fmt.Errorf("worker %d: Filter() = %v, want %v", i, got, want)
+				return
+			}
+
+			var deps classfile.ModuleDeps
+			f.OnRequire(&classfile.Project{}, &deps)
+			if got := len(deps.Deps()); got != wantDeps {
+				errs <- fmt.Errorf("worker %d: deps = %d, want %d", i, got, wantDeps)
+				return
+			}
+			errs <- nil
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
 	}
 }
 
