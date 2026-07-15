@@ -10,19 +10,26 @@ import (
 	"io/fs"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
 	"github.com/goplus/llar/formula"
-
-	_ "github.com/goplus/llar/internal/ixgo"
+	llarixgo "github.com/goplus/llar/internal/ixgo"
 )
+
+// formulaProgram is the native GC owner for one interpreted formula program.
+// The interpreter is the cleanup argument, so it cannot make this owner reachable.
+type formulaProgram struct {
+	typ reflect.Type
+}
 
 // Formula represents a loaded LLAR formula file with its metadata and callbacks.
 // It contains module information and build/dependency handling functions.
 type Formula struct {
 	structElem reflect.Value
+	program    *formulaProgram
 
 	// NOTE(MeteorsLiu): these signatures MUST match with
 	// 	the method declaration of ModuleF in formula/classfile.go
@@ -73,8 +80,12 @@ type Formula struct {
 // The struct name is derived from the filename prefix before "_" (e.g., "hello" from "hello_llar.gox").
 // Calling Main() triggers Gopt_ModuleF_Main which invokes MainEntry() to populate the struct fields.
 func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
-	// Create a new ixgo interpreter context
-	ctx := ixgo.NewContext(0)
+	llarixgo.LockInterp()
+	defer llarixgo.UnlockInterp()
+
+	// Formula types remain cached after loading, so later interpreters must not
+	// reset the dynamic method slots used by earlier types.
+	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
 
 	// Read the raw DSL content from the .gox file
 	content, err := fs.ReadFile(path)
@@ -100,6 +111,8 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	if err != nil {
 		return nil, err
 	}
+	program := &formulaProgram{}
+	runtime.AddCleanup(program, llarixgo.ReleaseInterp, interp)
 
 	// Run package-level init functions
 	if err = interp.RunInit(); err != nil {
@@ -118,6 +131,7 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	if !ok {
 		return nil, fmt.Errorf("failed to load formula: struct name not found: %s", structName)
 	}
+	program.typ = typ
 
 	// Create a new instance of the generated struct (e.g., &hello{})
 	val := reflect.New(typ)
@@ -132,15 +146,82 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	val.Interface().(interface{ Main() }).Main()
 
 	// Extract the populated fields from the struct and return the Formula
-	return &Formula{
+	loaded := &Formula{
 		structElem: class,
+		program:    program,
 		ModPath:    valueOf(class, "modPath").(string),
 		FromVer:    valueOf(class, "modFromVer").(string),
 		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
 		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 		Filter:     valueOf(class, "fFilter").(func() bool),
-	}, nil
+	}
+	loaded.keepProgramAlive()
+	return loaded, nil
+}
+
+// Clone creates an independent class instance backed by the same compiled
+// formula program. Main must run again so its hooks capture the new instance.
+func Clone(f *Formula) *Formula {
+	llarixgo.LockInterp()
+	defer llarixgo.UnlockInterp()
+
+	val := reflect.New(f.program.typ)
+	class := val.Elem()
+	val.Interface().(interface{ Main() }).Main()
+
+	cloned := &Formula{
+		structElem: class,
+		program:    f.program,
+		ModPath:    valueOf(class, "modPath").(string),
+		FromVer:    valueOf(class, "modFromVer").(string),
+		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
+		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
+		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
+		Filter:     valueOf(class, "fFilter").(func() bool),
+	}
+	cloned.keepProgramAlive()
+	return cloned
+}
+
+// keepProgramAlive makes extracted hooks retain the cleanup owner. Without the
+// wrapper, the owner could become unreachable while the interpreted hook is
+// still callable:
+//
+//	fn := f.OnBuild
+//	f = nil
+//	runtime.GC()
+//	fn(...) // the interpreter may already have been released
+//
+// The original hook retains the interpreter, but not formulaProgram, which is
+// the AddCleanup target. KeepAlive also prevents cleanup during the hook call.
+func (f *Formula) keepProgramAlive() {
+	program := f.program
+	if fn := f.OnBuild; fn != nil {
+		f.OnBuild = func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult) {
+			fn(ctx, proj, out)
+			runtime.KeepAlive(program)
+		}
+	}
+	if fn := f.OnTest; fn != nil {
+		f.OnTest = func(ctx *formula.Context, proj *formula.Project, out *formula.TestResult) {
+			fn(ctx, proj, out)
+			runtime.KeepAlive(program)
+		}
+	}
+	if fn := f.OnRequire; fn != nil {
+		f.OnRequire = func(proj *formula.Project, deps *formula.ModuleDeps) {
+			fn(proj, deps)
+			runtime.KeepAlive(program)
+		}
+	}
+	if fn := f.Filter; fn != nil {
+		f.Filter = func() bool {
+			ok := fn()
+			runtime.KeepAlive(program)
+			return ok
+		}
+	}
 }
 
 // LoadFS loads a formula from a filesystem interface.

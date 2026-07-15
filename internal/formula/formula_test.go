@@ -7,9 +7,13 @@ package formula
 import (
 	"io/fs"
 	"os"
+	"runtime"
 	"testing"
+	"time"
 
+	"github.com/goplus/ixgo"
 	formulapkg "github.com/goplus/llar/formula"
+	llarixgo "github.com/goplus/llar/internal/ixgo"
 )
 
 func TestLoadFS(t *testing.T) {
@@ -87,6 +91,98 @@ func TestLoadFS_TargetSurface(t *testing.T) {
 		t.Fatalf("deps = %+v, want [madler/zlib@v1.3.1]", gotDeps)
 	}
 	f.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+}
+
+func TestClone(t *testing.T) {
+	fsys := os.DirFS("testdata/formula").(fs.ReadFileFS)
+	template, err := LoadFS(fsys, "targetsurface_llar.gox")
+	if err != nil {
+		t.Fatalf("LoadFS failed: %v", err)
+	}
+	// A later interpreter must not invalidate the template's Main method.
+	if _, err := LoadFS(fsys, "hello_llar.gox"); err != nil {
+		t.Fatalf("second LoadFS failed: %v", err)
+	}
+
+	first := Clone(template)
+	second := Clone(template)
+	setValue(first.structElem, "target", formulapkg.Matrix{
+		Options: map[string][]string{"zlib": {"ON"}},
+	})
+	setValue(second.structElem, "target", formulapkg.Matrix{
+		Options: map[string][]string{"zlib": {"OFF"}},
+	})
+
+	if !first.Filter() {
+		t.Fatal("first Filter() = false, want true")
+	}
+	if second.Filter() {
+		t.Fatal("second Filter() = true, want false")
+	}
+
+	var firstDeps, secondDeps formulapkg.ModuleDeps
+	first.OnRequire(&formulapkg.Project{}, &firstDeps)
+	second.OnRequire(&formulapkg.Project{}, &secondDeps)
+	if got := firstDeps.Deps(); len(got) != 1 || got[0].Path != "madler/zlib" {
+		t.Fatalf("first deps = %+v", got)
+	}
+	if got := secondDeps.Deps(); len(got) != 0 {
+		t.Fatalf("second deps = %+v, want none", got)
+	}
+}
+
+func TestFormulaProgramCleanup(t *testing.T) {
+	runtime.GC()
+	time.Sleep(10 * time.Millisecond)
+
+	llarixgo.LockInterp()
+	_, before, _ := ixgo.IcallStat()
+	llarixgo.UnlockInterp()
+
+	var loaded int
+	var onBuild func(*formulapkg.Context, *formulapkg.Project, *formulapkg.BuildResult)
+	func() {
+		fsys := os.DirFS("testdata/formula").(fs.ReadFileFS)
+		f, err := LoadFS(fsys, "targetsurface_llar.gox")
+		if err != nil {
+			t.Fatalf("LoadFS failed: %v", err)
+		}
+		for range 16 {
+			_ = Clone(f)
+		}
+
+		llarixgo.LockInterp()
+		_, loaded, _ = ixgo.IcallStat()
+		llarixgo.UnlockInterp()
+		onBuild = f.OnBuild
+	}()
+	if loaded <= before {
+		t.Fatalf("allocated icall slots after load = %d, want more than %d", loaded, before)
+	}
+	runtime.GC()
+	time.Sleep(10 * time.Millisecond)
+	llarixgo.LockInterp()
+	_, withHook, _ := ixgo.IcallStat()
+	llarixgo.UnlockInterp()
+	if withHook <= before {
+		t.Fatal("formula program was released while OnBuild remained reachable")
+	}
+	onBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+	onBuild = nil
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		time.Sleep(10 * time.Millisecond)
+
+		llarixgo.LockInterp()
+		_, allocated, _ := ixgo.IcallStat()
+		llarixgo.UnlockInterp()
+		if allocated <= before {
+			return
+		}
+	}
+	t.Fatalf("allocated icall slots did not return to baseline %d", before)
 }
 
 func TestFormula_SetStdout(t *testing.T) {

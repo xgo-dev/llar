@@ -19,11 +19,6 @@ import (
 	"github.com/goplus/xgo/parser"
 )
 
-// loadMu serializes ixgo interpreter loading (formula.LoadFS, loadComparatorFS).
-// The ixgo interpreter has internal race conditions during concurrent loading,
-// so all load operations must be serialized.
-var loadMu sync.Mutex
-
 const defaultFormulaSuffix = "_llar.gox"
 const defaultComparatorSuffix = "_cmp.gox"
 
@@ -65,8 +60,6 @@ func loadOrDefaultComparator(fsys fs.FS) (func(v1, v2 module.Version) int, error
 			return gnu.Compare(v1.Version, v2.Version)
 		}, nil
 	}
-	loadMu.Lock()
-	defer loadMu.Unlock()
 	return loadComparatorFS(fsys.(fs.ReadFileFS), matches[0])
 }
 
@@ -89,17 +82,15 @@ func (m *formulaModule) at(version string) (*formula.Formula, error) {
 	defer m.mu.Unlock()
 
 	if f, ok := m.formulas[fromVer]; ok {
-		return f, nil
+		return formula.Clone(f), nil
 	}
-	loadMu.Lock()
 	f, err := formula.LoadFS(m.fsys.(fs.ReadFileFS), formulaPath)
-	loadMu.Unlock()
 
 	if err != nil {
 		return nil, err
 	}
 	m.formulas[fromVer] = f
-	return f, nil
+	return formula.Clone(f), nil
 }
 
 // findMaxFromVer finds the formula file with the highest fromVer that is <= the target version.
