@@ -229,9 +229,6 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	}
 
 	build := func(mod *modules.Module) (Result, error) {
-		mod.SetStdout(b.stdout)
-		mod.SetStderr(b.stderr)
-
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
 		testThisMod := b.runTest && isRoot && mod.OnTest != nil
 

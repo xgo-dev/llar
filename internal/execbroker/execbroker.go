@@ -6,7 +6,9 @@ package execbroker
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 
@@ -28,7 +30,7 @@ type Request struct {
 type Middleware func(Request) Request
 
 // Scope supplies process-independent defaults for commands created while fn
-// runs. Explicit fields already set on a command take precedence.
+// runs. Custom fields already set on a command take precedence.
 type Scope struct {
 	Env        []string
 	Dir        string
@@ -61,6 +63,17 @@ func Do(scope Scope, fn func() error) error {
 		scopeMu.Unlock()
 	}()
 	return fn()
+}
+
+// Println writes to the stdout configured for the active scope.
+func Println(a ...any) (int, error) {
+	w := io.Writer(os.Stdout)
+	scopeMu.RLock()
+	if scope, ok := scopes[goid.Get()]; ok && scope.Stdout != nil {
+		w = scope.Stdout
+	}
+	scopeMu.RUnlock()
+	return fmt.Fprintln(w, a...)
 }
 
 // Command is the brokered equivalent of exec.Command.
@@ -118,13 +131,15 @@ func rewrite(req Request) Request {
 		if req.Dir == "" {
 			req.Dir = scope.Dir
 		}
-		if req.Stdin == nil {
+		// gsh initializes commands with the process streams. Treat those as
+		// defaults while preserving custom writers used by features like Capout.
+		if scope.Stdin != nil && (req.Stdin == nil || req.Stdin == os.Stdin) {
 			req.Stdin = scope.Stdin
 		}
-		if req.Stdout == nil {
+		if scope.Stdout != nil && (req.Stdout == nil || req.Stdout == os.Stdout) {
 			req.Stdout = scope.Stdout
 		}
-		if req.Stderr == nil {
+		if scope.Stderr != nil && (req.Stderr == nil || req.Stderr == os.Stderr) {
 			req.Stderr = scope.Stderr
 		}
 		if scope.Middleware != nil {

@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/build"
+	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/mod/module"
@@ -822,7 +822,6 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	store := repo.New(formulaDir, &noopVCSRepo{})
 	ctx := context.Background()
 	matrix := computeMatrix()
-	matrixStr := matrix.Combinations()[0]
 	mods, err := modules.Load(ctx, module.Version{Path: "test/liba", Version: "1.0.0"}, modules.Options{
 		FormulaStore: store,
 		Matrix:       matrix,
@@ -836,25 +835,18 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	t.Cleanup(func() { makeVerbose = savedVerbose })
 
 	stdout, stderr, restore := captureProcessStreams(t)
-	workspaceDir := t.TempDir()
-	prepopulateCache(t, workspaceDir, "test/liba", "1.0.0", matrixStr, "-lA")
-	builder, err := build.NewBuilder(build.Options{
-		Store:        store,
-		MatrixStr:    matrixStr,
-		WorkspaceDir: workspaceDir,
-		Stdout:       buildOutputWriter(),
-		Stderr:       buildOutputWriter(),
-	})
-	if err != nil {
-		t.Fatalf("build.NewBuilder() failed: %v", err)
-	}
-	if _, err := builder.Build(ctx, mods); err != nil {
-		t.Fatalf("Build() failed: %v", err)
-	}
-
 	var out formula.BuildResult
-	mods[0].OnBuild(nil, nil, &out)
+	err = execbroker.Do(execbroker.Scope{
+		Stdout: buildOutputWriter(),
+		Stderr: buildOutputWriter(),
+	}, func() error {
+		mods[0].OnBuild(nil, nil, &out)
+		return nil
+	})
 	restore()
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if out.Metadata() != "-lA" {
 		t.Fatalf("metadata = %q, want %q", out.Metadata(), "-lA")

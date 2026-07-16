@@ -6,9 +6,7 @@ package formula
 
 import (
 	"fmt"
-	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -30,9 +28,8 @@ type formulaProgram struct {
 // Formula represents a loaded LLAR formula file with its metadata and callbacks.
 // It contains module information and build/dependency handling functions.
 type Formula struct {
-	structElem  reflect.Value
-	program     *formulaProgram
-	printOutput *printOutput
+	structElem reflect.Value
+	program    *formulaProgram
 
 	// NOTE(MeteorsLiu): these signatures MUST match with
 	// 	the method declaration of ModuleF in formula/classfile.go
@@ -42,10 +39,6 @@ type Formula struct {
 	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
 	OnTest    func(ctx *formula.Context, proj *formula.Project, out *formula.TestResult)
 	Filter    func() bool
-}
-
-type printOutput struct {
-	writer io.Writer
 }
 
 // loadFS is the internal implementation for loading a formula from a filesystem.
@@ -95,10 +88,7 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
 	ctx.RegisterExternal("os/exec.Command", execbroker.Command)
 	ctx.RegisterExternal("os/exec.CommandContext", execbroker.CommandContext)
-	output := &printOutput{writer: os.Stdout}
-	ctx.RegisterExternal("fmt.Println", func(a ...any) (int, error) {
-		return fmt.Fprintln(output.writer, a...)
-	})
+	ctx.RegisterExternal("fmt.Println", execbroker.Println)
 
 	// Read the raw DSL content from the .gox file
 	content, err := fs.ReadFile(path)
@@ -160,15 +150,14 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 
 	// Extract the populated fields from the struct and return the Formula
 	loaded := &Formula{
-		structElem:  class,
-		program:     program,
-		printOutput: output,
-		ModPath:     valueOf(class, "modPath").(string),
-		FromVer:     valueOf(class, "modFromVer").(string),
-		OnBuild:     valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
-		OnTest:      valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
-		OnRequire:   valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
-		Filter:      valueOf(class, "fFilter").(func() bool),
+		structElem: class,
+		program:    program,
+		ModPath:    valueOf(class, "modPath").(string),
+		FromVer:    valueOf(class, "modFromVer").(string),
+		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
+		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
+		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
+		Filter:     valueOf(class, "fFilter").(func() bool),
 	}
 	loaded.keepProgramAlive()
 	return loaded, nil
@@ -185,15 +174,14 @@ func Clone(f *Formula) *Formula {
 	val.Interface().(interface{ Main() }).Main()
 
 	cloned := &Formula{
-		structElem:  class,
-		program:     f.program,
-		printOutput: f.printOutput,
-		ModPath:     valueOf(class, "modPath").(string),
-		FromVer:     valueOf(class, "modFromVer").(string),
-		OnBuild:     valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
-		OnTest:      valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
-		OnRequire:   valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
-		Filter:      valueOf(class, "fFilter").(func() bool),
+		structElem: class,
+		program:    f.program,
+		ModPath:    valueOf(class, "modPath").(string),
+		FromVer:    valueOf(class, "modFromVer").(string),
+		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
+		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
+		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
+		Filter:     valueOf(class, "fFilter").(func() bool),
 	}
 	cloned.keepProgramAlive()
 	return cloned
@@ -244,22 +232,4 @@ func (f *Formula) keepProgramAlive() {
 // The path should be relative to the filesystem root.
 func LoadFS(fsys fs.ReadFileFS, path string) (*Formula, error) {
 	return loadFS(fsys, path)
-}
-
-// SetStdout sets the stdout writer for XGo print output and gsh commands.
-func (f *Formula) SetStdout(w io.Writer) {
-	if w == nil {
-		w = io.Discard
-	}
-	f.printOutput.writer = w
-	if f.structElem.IsValid() {
-		setValue(f.structElem, "fout", w)
-	}
-}
-
-// SetStderr sets the stderr writer for the formula's gsh.App.
-func (f *Formula) SetStderr(w io.Writer) {
-	if f.structElem.IsValid() {
-		setValue(f.structElem, "ferr", w)
-	}
 }

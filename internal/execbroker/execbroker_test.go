@@ -45,6 +45,20 @@ func TestCommandScope(t *testing.T) {
 	}
 }
 
+func TestPrintlnScope(t *testing.T) {
+	var stdout bytes.Buffer
+	err := Do(Scope{Stdout: &stdout}, func() error {
+		_, err := Println("hello")
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := stdout.String(), "hello\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestCommandMiddleware(t *testing.T) {
 	err := Do(Scope{Middleware: func(req Request) Request {
 		req.Name = "replacement"
@@ -96,6 +110,22 @@ func TestRunPreservesExplicitFields(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRunReplacesProcessStdout(t *testing.T) {
+	var stdout bytes.Buffer
+	err := Do(Scope{Stdout: &stdout}, func() error {
+		cmd := exec.Command(os.Args[0], "-test.run=TestExecBrokerHelperProcess")
+		cmd.Env = append(os.Environ(), "EXECBROKER_HELPER=scoped")
+		cmd.Stdout = os.Stdout
+		return Run(cmd)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "scoped" {
+		t.Fatalf("output = %q, want scoped", got)
 	}
 }
 
