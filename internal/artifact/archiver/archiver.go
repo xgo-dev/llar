@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -17,19 +17,25 @@ const metadataPath = ".llar/metadata.json"
 // Pack writes srcDir as an LLAR binary artifact at dst.
 // The metainfo bytes are written verbatim to .llar/metadata.json.
 func Pack(srcDir, dst string, metainfo json.RawMessage) error {
+	return PackFS(os.DirFS(srcDir), dst, metainfo)
+}
+
+// PackFS writes src as an LLAR binary artifact at dst.
+// The metainfo bytes are written verbatim to .llar/metadata.json.
+func PackFS(src fs.FS, dst string, metainfo json.RawMessage) error {
 	if !json.Valid(metainfo) {
 		return fmt.Errorf("invalid artifact metainfo JSON")
 	}
 	if strings.HasSuffix(dst, ".zip") {
-		return writeZipArtifact(srcDir, dst, metainfo)
+		return writeZipArtifact(src, dst, metainfo)
 	}
 	if strings.HasSuffix(dst, ".tar.gz") {
-		return writeTarGzArtifact(srcDir, dst, metainfo)
+		return writeTarGzArtifact(src, dst, metainfo)
 	}
 	return fmt.Errorf("unsupported artifact output %q: use .zip or .tar.gz", dst)
 }
 
-func writeZipArtifact(srcDir, dst string, metainfo json.RawMessage) error {
+func writeZipArtifact(src fs.FS, dst string, metainfo json.RawMessage) error {
 	f, err := os.Create(dst)
 	if err != nil {
 		return err
@@ -39,14 +45,14 @@ func writeZipArtifact(srcDir, dst string, metainfo json.RawMessage) error {
 	w := zip.NewWriter(f)
 	defer w.Close()
 
-	if err := packZip(w, srcDir); err != nil {
+	if err := packZip(w, src); err != nil {
 		return err
 	}
 	return writeZipMetadata(w, metainfo)
 }
 
-func packZip(w *zip.Writer, srcDir string) error {
-	add := func(path, name string, info os.FileInfo) error {
+func packZip(w *zip.Writer, src fs.FS) error {
+	add := func(name string, info fs.FileInfo) error {
 		header, err := zip.FileInfoHeader(info)
 		if err != nil {
 			return err
@@ -58,33 +64,33 @@ func packZip(w *zip.Writer, srcDir string) error {
 		if err != nil {
 			return err
 		}
-		file, err := os.Open(path)
+		file, err := src.Open(name)
 		if err != nil {
 			return err
 		}
-		defer file.Close()
-		_, err = io.Copy(writer, file)
-		return err
+		if _, err := io.Copy(writer, file); err != nil {
+			_ = file.Close()
+			return err
+		}
+		return file.Close()
 	}
 
-	walk := func(path string, info os.FileInfo, err error) error {
+	return fs.WalkDir(src, ".", func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if name == "." || entry.IsDir() {
 			return nil
 		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		name := filepath.ToSlash(rel)
 		if name == metadataPath {
 			return nil
 		}
-		return add(path, name, info)
-	}
-	return filepath.Walk(srcDir, walk)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		return add(name, info)
+	})
 }
 
 func writeZipMetadata(w *zip.Writer, metainfo json.RawMessage) error {
@@ -101,7 +107,7 @@ func writeZipMetadata(w *zip.Writer, metainfo json.RawMessage) error {
 	return err
 }
 
-func writeTarGzArtifact(srcDir, dst string, metainfo json.RawMessage) error {
+func writeTarGzArtifact(src fs.FS, dst string, metainfo json.RawMessage) error {
 	f, err := os.Create(dst)
 	if err != nil {
 		return err
@@ -114,14 +120,14 @@ func writeTarGzArtifact(srcDir, dst string, metainfo json.RawMessage) error {
 	tw := tar.NewWriter(gz)
 	defer tw.Close()
 
-	if err := packTar(tw, srcDir); err != nil {
+	if err := packTar(tw, src); err != nil {
 		return err
 	}
 	return writeTarMetadata(tw, metainfo)
 }
 
-func packTar(tw *tar.Writer, srcDir string) error {
-	add := func(path, name string, info os.FileInfo) error {
+func packTar(tw *tar.Writer, src fs.FS) error {
+	add := func(name string, info fs.FileInfo) error {
 		header, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return err
@@ -130,33 +136,33 @@ func packTar(tw *tar.Writer, srcDir string) error {
 		if err := tw.WriteHeader(header); err != nil {
 			return err
 		}
-		file, err := os.Open(path)
+		file, err := src.Open(name)
 		if err != nil {
 			return err
 		}
-		defer file.Close()
-		_, err = io.Copy(tw, file)
-		return err
+		if _, err := io.Copy(tw, file); err != nil {
+			_ = file.Close()
+			return err
+		}
+		return file.Close()
 	}
 
-	walk := func(path string, info os.FileInfo, err error) error {
+	return fs.WalkDir(src, ".", func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if name == "." || entry.IsDir() {
 			return nil
 		}
-		rel, err := filepath.Rel(srcDir, path)
-		if err != nil {
-			return err
-		}
-		name := filepath.ToSlash(rel)
 		if name == metadataPath {
 			return nil
 		}
-		return add(path, name, info)
-	}
-	return filepath.Walk(srcDir, walk)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		return add(name, info)
+	})
 }
 
 func writeTarMetadata(tw *tar.Writer, metainfo json.RawMessage) error {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestPackRejectsNonArchiveOutput(t *testing.T) {
@@ -75,6 +76,43 @@ func TestPackTarGzAddsMetadataAndPayload(t *testing.T) {
 	if string(files[".llar/metadata.json"]) != string(metainfo) {
 		t.Fatalf("tar.gz metadata = %q, want %q", files[".llar/metadata.json"], metainfo)
 	}
+}
+
+func TestPackFSAddsMetadataAndPayload(t *testing.T) {
+	src := fstest.MapFS{
+		"lib/libfoo.a":        &fstest.MapFile{Data: []byte("archive"), Mode: 0o644},
+		"include/foo.h":       &fstest.MapFile{Data: []byte("#pragma once"), Mode: 0o644},
+		".llar/metadata.json": &fstest.MapFile{Data: []byte("old"), Mode: 0o644},
+	}
+	metainfo := json.RawMessage(`{"metadata":"-lfoo"}`)
+
+	t.Run("zip", func(t *testing.T) {
+		dst := filepath.Join(t.TempDir(), "out.zip")
+		if err := PackFS(src, dst, metainfo); err != nil {
+			t.Fatalf("PackFS: %v", err)
+		}
+		files := readZip(t, dst)
+		if string(files["lib/libfoo.a"]) != "archive" {
+			t.Fatalf("zip lib/libfoo.a = %q, want %q", files["lib/libfoo.a"], "archive")
+		}
+		if string(files[".llar/metadata.json"]) != string(metainfo) {
+			t.Fatalf("zip metadata = %q, want %q", files[".llar/metadata.json"], metainfo)
+		}
+	})
+
+	t.Run("tar.gz", func(t *testing.T) {
+		dst := filepath.Join(t.TempDir(), "out.tar.gz")
+		if err := PackFS(src, dst, metainfo); err != nil {
+			t.Fatalf("PackFS: %v", err)
+		}
+		files := readTarGz(t, dst)
+		if string(files["lib/libfoo.a"]) != "archive" {
+			t.Fatalf("tar.gz lib/libfoo.a = %q, want %q", files["lib/libfoo.a"], "archive")
+		}
+		if string(files[".llar/metadata.json"]) != string(metainfo) {
+			t.Fatalf("tar.gz metadata = %q, want %q", files[".llar/metadata.json"], metainfo)
+		}
+	})
 }
 
 func TestPackOverwritesSourceMetadataInOutputOnly(t *testing.T) {
