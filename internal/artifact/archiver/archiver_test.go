@@ -5,7 +5,9 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,6 +208,181 @@ func TestPackTarGzReturnsOpenError(t *testing.T) {
 	if err := Pack(src, dst, json.RawMessage(`{}`)); err == nil {
 		t.Fatal("Pack error = nil, want open error")
 	}
+}
+
+func TestPackFSReturnsSourceErrors(t *testing.T) {
+	testErr := errors.New("test filesystem error")
+	tests := []struct {
+		name string
+		fsys fs.FS
+	}{
+		{
+			name: "walk",
+			fsys: &faultFS{err: testErr},
+		},
+		{
+			name: "info",
+			fsys: &faultFS{
+				fsys:        fstest.MapFS{"payload": &fstest.MapFile{Data: []byte("data")}},
+				infoErrName: "payload",
+				err:         testErr,
+			},
+		},
+		{
+			name: "read",
+			fsys: &faultFS{
+				fsys:        fstest.MapFS{"payload": &fstest.MapFile{Data: []byte("data")}},
+				readErrName: "payload",
+				err:         testErr,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		for _, ext := range []string{".zip", ".tar.gz"} {
+			t.Run(test.name+ext, func(t *testing.T) {
+				dst := filepath.Join(t.TempDir(), "out"+ext)
+				err := PackFS(test.fsys, dst, json.RawMessage(`{}`))
+				if !errors.Is(err, testErr) {
+					t.Fatalf("PackFS error = %v, want %v", err, testErr)
+				}
+			})
+		}
+	}
+}
+
+func TestPackTarRejectsUnsupportedFileMode(t *testing.T) {
+	src := &faultFS{
+		fsys:     fstest.MapFS{"socket": &fstest.MapFile{}},
+		modeName: "socket",
+		mode:     fs.ModeSocket,
+	}
+	tw := tar.NewWriter(io.Discard)
+
+	if err := packTar(tw, src); err == nil {
+		t.Fatal("packTar error = nil, want unsupported file mode error")
+	}
+}
+
+func TestPackReturnsWriterErrors(t *testing.T) {
+	src := fstest.MapFS{"payload": &fstest.MapFile{Data: []byte("data")}}
+	testErr := errors.New("test compressor error")
+	compressor := func(io.Writer) (io.WriteCloser, error) {
+		return nil, testErr
+	}
+
+	t.Run("zip payload", func(t *testing.T) {
+		w := zip.NewWriter(io.Discard)
+		w.RegisterCompressor(zip.Deflate, compressor)
+		if err := packZip(w, src); !errors.Is(err, testErr) {
+			t.Fatalf("packZip error = %v, want %v", err, testErr)
+		}
+	})
+
+	t.Run("zip metadata", func(t *testing.T) {
+		w := zip.NewWriter(io.Discard)
+		w.RegisterCompressor(zip.Deflate, compressor)
+		if err := writeZipMetadata(w, json.RawMessage(`{}`)); !errors.Is(err, testErr) {
+			t.Fatalf("writeZipMetadata error = %v, want %v", err, testErr)
+		}
+	})
+
+	t.Run("tar payload", func(t *testing.T) {
+		w := tar.NewWriter(io.Discard)
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := packTar(w, src); err == nil {
+			t.Fatal("packTar error = nil, want closed writer error")
+		}
+	})
+
+	t.Run("tar metadata", func(t *testing.T) {
+		w := tar.NewWriter(io.Discard)
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeTarMetadata(w, json.RawMessage(`{}`)); err == nil {
+			t.Fatal("writeTarMetadata error = nil, want closed writer error")
+		}
+	})
+}
+
+type faultFS struct {
+	fsys        fs.FS
+	readErrName string
+	infoErrName string
+	modeName    string
+	mode        fs.FileMode
+	err         error
+}
+
+func (f *faultFS) Open(name string) (fs.File, error) {
+	if f.fsys == nil {
+		return nil, f.err
+	}
+	file, err := f.fsys.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	if name == f.readErrName {
+		return &faultFile{File: file, err: f.err}, nil
+	}
+	return file, nil
+}
+
+func (f *faultFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	entries, err := fs.ReadDir(f.fsys, name)
+	if err != nil {
+		return nil, err
+	}
+	for i, entry := range entries {
+		if entry.Name() == f.infoErrName || entry.Name() == f.modeName {
+			entries[i] = &faultDirEntry{
+				DirEntry: entry,
+				infoErr:  entry.Name() == f.infoErrName,
+				mode:     f.mode,
+				err:      f.err,
+			}
+		}
+	}
+	return entries, nil
+}
+
+type faultFile struct {
+	fs.File
+	err error
+}
+
+func (f *faultFile) Read([]byte) (int, error) {
+	return 0, f.err
+}
+
+type faultDirEntry struct {
+	fs.DirEntry
+	infoErr bool
+	mode    fs.FileMode
+	err     error
+}
+
+func (e *faultDirEntry) Info() (fs.FileInfo, error) {
+	if e.infoErr {
+		return nil, e.err
+	}
+	info, err := e.DirEntry.Info()
+	if err != nil {
+		return nil, err
+	}
+	return &faultFileInfo{FileInfo: info, mode: e.mode}, nil
+}
+
+type faultFileInfo struct {
+	fs.FileInfo
+	mode fs.FileMode
+}
+
+func (i *faultFileInfo) Mode() fs.FileMode {
+	return i.mode
 }
 
 func setupSourceDir(t *testing.T) string {
