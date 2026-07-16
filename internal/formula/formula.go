@@ -6,7 +6,6 @@ package formula
 
 import (
 	"fmt"
-	"io"
 	"io/fs"
 	"path/filepath"
 	"reflect"
@@ -16,6 +15,7 @@ import (
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
 	"github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/execbroker"
 	llarixgo "github.com/goplus/llar/internal/ixgo"
 )
 
@@ -86,6 +86,9 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 	// Formula types remain cached after loading, so later interpreters must not
 	// reset the dynamic method slots used by earlier types.
 	ctx := ixgo.NewContext(ixgo.SupportMultipleInterp)
+	ctx.RegisterExternal("os/exec.Command", execbroker.Command)
+	ctx.RegisterExternal("os/exec.CommandContext", execbroker.CommandContext)
+	ctx.RegisterExternal("fmt.Println", execbroker.Println)
 
 	// Read the raw DSL content from the .gox file
 	content, err := fs.ReadFile(path)
@@ -229,19 +232,4 @@ func (f *Formula) keepProgramAlive() {
 // The path should be relative to the filesystem root.
 func LoadFS(fsys fs.ReadFileFS, path string) (*Formula, error) {
 	return loadFS(fsys, path)
-}
-
-// SetStdout sets the stdout writer for the formula's gsh.App.
-// This is used to control build output verbosity.
-func (f *Formula) SetStdout(w io.Writer) {
-	if f.structElem.IsValid() {
-		setValue(f.structElem, "fout", w)
-	}
-}
-
-// SetStderr sets the stderr writer for the formula's gsh.App.
-func (f *Formula) SetStderr(w io.Writer) {
-	if f.structElem.IsValid() {
-		setValue(f.structElem, "ferr", w)
-	}
 }

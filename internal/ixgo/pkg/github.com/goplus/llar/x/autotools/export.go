@@ -15,8 +15,8 @@ func init() {
 		Name: "autotools",
 		Path: "github.com/goplus/llar/x/autotools",
 		Deps: map[string]string{
+			"github.com/goplus/llar/internal/execbroker": "execbroker",
 			"os":            "os",
-			"os/exec":       "exec",
 			"path/filepath": "filepath",
 			"runtime":       "runtime",
 		},

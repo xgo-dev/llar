@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build/cache"
+	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
@@ -21,6 +23,8 @@ type Builder struct {
 	store        repo.Store
 	matrix       string
 	runTest      bool
+	stdout       io.Writer
+	stderr       io.Writer
 	workspaceDir string
 	cache        cache.Cache
 	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
@@ -42,6 +46,8 @@ type Options struct {
 	// Transitive dependencies honor the cache normally and do not have
 	// their OnTest hooks triggered.
 	RunTest      bool
+	Stdout       io.Writer
+	Stderr       io.Writer
 	WorkspaceDir string
 	Cache        cache.Cache
 }
@@ -73,10 +79,20 @@ func NewBuilder(opts Options) (*Builder, error) {
 	if c == nil {
 		c = &localCache{workspaceDir: workspaceDir}
 	}
+	stdout := opts.Stdout
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+	stderr := opts.Stderr
+	if stderr == nil {
+		stderr = os.Stderr
+	}
 	return &Builder{
 		store:        opts.Store,
 		matrix:       opts.MatrixStr,
 		runTest:      opts.RunTest,
+		stdout:       stdout,
+		stderr:       stderr,
 		workspaceDir: workspaceDir,
 		cache:        c,
 		newRepo:      vcs.NewRepo,
@@ -254,8 +270,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		defer os.RemoveAll(tmpSourceDir)
 
-		// Before we start to build, clone source to tmpSourceDir
-		// And switch current dir to it.
+		// Before we start to build, clone source to tmpSourceDir.
 		// TODO(MeteorsLiu): Support different code host
 		repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
 		if err != nil {
@@ -281,33 +296,38 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 		project := &classfile.Project{Deps: deps, SourceFS: mod.FS.(fs.ReadFileFS)}
 
-		// Ready! Go!
-		if err := os.Chdir(tmpSourceDir); err != nil {
-			return Result{}, err
-		}
-
-		// Run OnBuild only on cache miss; reuse cached metadata otherwise.
 		var metadata string
-		if cacheHit {
-			metadata = entry.Metadata
-		} else {
-			var out classfile.BuildResult
-			mod.OnBuild(buildContext, project, &out)
-			if len(out.Errs()) > 0 {
-				return Result{}, errors.Join(out.Errs()...)
+		if err := execbroker.Do(execbroker.Scope{
+			Dir:    tmpSourceDir,
+			Stdin:  os.Stdin,
+			Stdout: b.stdout,
+			Stderr: b.stderr,
+		}, func() error {
+			// Run OnBuild only on cache miss; reuse cached metadata otherwise.
+			if cacheHit {
+				metadata = entry.Metadata
+			} else {
+				var out classfile.BuildResult
+				mod.OnBuild(buildContext, project, &out)
+				if len(out.Errs()) > 0 {
+					return errors.Join(out.Errs()...)
+				}
+				metadata = out.Metadata()
 			}
-			metadata = out.Metadata()
-		}
 
-		// Run OnTest (root only) against the just-built or cached
-		// artifacts, reusing the same build context so tests see a
-		// consistent environment either way.
-		if testThisMod {
-			var testOut classfile.TestResult
-			mod.OnTest(buildContext, project, &testOut)
-			if len(testOut.Errs()) > 0 {
-				return Result{}, fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, errors.Join(testOut.Errs()...))
+			// Run OnTest (root only) against the just-built or cached
+			// artifacts, reusing the same build context so tests see a
+			// consistent environment either way.
+			if testThisMod {
+				var testOut classfile.TestResult
+				mod.OnTest(buildContext, project, &testOut)
+				if len(testOut.Errs()) > 0 {
+					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, errors.Join(testOut.Errs()...))
+				}
 			}
+			return nil
+		}); err != nil {
+			return Result{}, err
 		}
 
 		// Save cache only on cache miss. A cache hit means the entry is

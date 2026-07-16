@@ -5,6 +5,7 @@
 package formula
 
 import (
+	"bytes"
 	"io/fs"
 	"os"
 	"runtime"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/goplus/ixgo"
 	formulapkg "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/internal/execbroker"
 	llarixgo "github.com/goplus/llar/internal/ixgo"
 )
 
@@ -185,31 +187,21 @@ func TestFormulaProgramCleanup(t *testing.T) {
 	t.Fatalf("allocated icall slots did not return to baseline %d", before)
 }
 
-func TestFormula_SetStdout(t *testing.T) {
-	formula, err := loadFS(os.DirFS("testdata/formula").(fs.ReadFileFS), "hello_llar.gox")
+func TestFormulaPrintUsesBrokerScope(t *testing.T) {
+	f, err := loadFS(os.DirFS("testdata/formula").(fs.ReadFileFS), "hello_llar.gox")
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	var buf []byte
-	formula.SetStdout(&mockWriter{buf: &buf})
-	formula.SetStdout(nil)
-}
 
-func TestFormula_SetStderr(t *testing.T) {
-	formula, err := loadFS(os.DirFS("testdata/formula").(fs.ReadFileFS), "hello_llar.gox")
+	var stdout bytes.Buffer
+	err = execbroker.Do(execbroker.Scope{Stdout: &stdout}, func() error {
+		f.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("Load failed: %v", err)
+		t.Fatal(err)
 	}
-	var buf []byte
-	formula.SetStderr(&mockWriter{buf: &buf})
-	formula.SetStderr(nil)
-}
-
-type mockWriter struct {
-	buf *[]byte
-}
-
-func (m *mockWriter) Write(p []byte) (n int, err error) {
-	*m.buf = append(*m.buf, p...)
-	return len(p), nil
+	if got, want := stdout.String(), "hello\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
 }
