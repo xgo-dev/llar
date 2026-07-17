@@ -16,7 +16,7 @@ concurrency:
 jobs:
   workers:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -41,6 +41,19 @@ jobs:
       - name: Build llard
         run: go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llard" ./cmd/llard
 
+      - name: Prepare formula repository
+        run: |
+          formula_repo="$RUNNER_TEMP/llarhub"
+          mkdir -p "$formula_repo"
+          cp -R testdata/kodo-e2e/formulas/. "$formula_repo/"
+          git -C "$formula_repo" init --initial-branch=main
+          git -C "$formula_repo" config user.email llard-e2e@example.com
+          git -C "$formula_repo" config user.name "LLARD E2E"
+          git -C "$formula_repo" add .
+          git -C "$formula_repo" commit -m "LLARD E2E formulas"
+          git config --global protocol.file.allow always
+          git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
+
       - name: Run llard
         env:
           QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
@@ -62,7 +75,11 @@ jobs:
           prefix="${prefix}llard-cluster-e2e/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           runtime_dir="$RUNNER_TEMP/llard-worker"
-          mkdir -p "$runtime_dir" "$RUNNER_TEMP/llard-cache"
+          tracker_dir="$RUNNER_TEMP/llard-bin"
+          build_log="$RUNNER_TEMP/llard-builds"
+          real_git="$(command -v git)"
+          mkdir -p "$runtime_dir" "$RUNNER_TEMP/llard-cache" "$tracker_dir"
+          : > "$build_log"
           printf '%s\n' \
             'LLARD_ADDR=0.0.0.0:8080' \
             "LLARD_KODO_ACCESS_KEY=$QINIU_ACCESS_KEY" \
@@ -71,12 +88,29 @@ jobs:
             "LLARD_KODO_PUBLIC_DOMAIN=$QINIU_PUBLIC_DOMAIN" \
             "LLARD_KODO_PREFIX=$prefix" \
             > "$runtime_dir/.env"
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'case "$PWD" in' \
+            '  /tmp/source-*)' \
+            '    if [ "$1" = fetch ]; then' \
+            '      printf "%s\\n" "$PWD" >> "$LLARD_E2E_BUILD_LOG"' \
+            '    fi' \
+            '    ;;' \
+            'esac' \
+            'exec "$LLARD_E2E_REAL_GIT" "$@"' \
+            > "$tracker_dir/git"
+          chmod +x "$tracker_dir/git"
 
           cd "$runtime_dir"
-          XDG_CACHE_HOME="$RUNNER_TEMP/llard-cache" "$RUNNER_TEMP/llard" &
+          LLARD_E2E_BUILD_LOG="$build_log" \
+            LLARD_E2E_REAL_GIT="$real_git" \
+            PATH="$tracker_dir:$PATH" \
+            XDG_CACHE_HOME="$RUNNER_TEMP/llard-cache" \
+            "$RUNNER_TEMP/llard" &
           llard_pid=$!
 
-          LLARD_PID="$llard_pid" python3 - <<'PY' &
+          LLARD_PID="$llard_pid" LLARD_E2E_BUILD_LOG="$build_log" python3 - <<'PY' &
+          import json
           import os
           import signal
           import threading
@@ -89,6 +123,15 @@ jobs:
                   print(format % args, flush=True)
 
               def do_GET(self):
+                  if self.path == "/builds":
+                      with open(os.environ["LLARD_E2E_BUILD_LOG"], encoding="utf-8") as build_log:
+                          body = json.dumps([line.rstrip("\n") for line in build_log]).encode()
+                      self.send_response(200)
+                      self.send_header("Content-Type", "application/json")
+                      self.send_header("Content-Length", str(len(body)))
+                      self.end_headers()
+                      self.wfile.write(body)
+                      return
                   if self.path != "/shutdown":
                       self.send_error(404)
                       return
@@ -113,13 +156,18 @@ jobs:
 
   nginx:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       WORKER_1: llar-${{ github.run_id }}-${{ github.run_attempt }}-worker-1
       WORKER_2: llar-${{ github.run_id }}-${{ github.run_attempt }}-worker-2
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
 
       - name: Join private network
         uses: tailscale/github-action@v4
@@ -182,6 +230,18 @@ jobs:
             request "request-$key"
           done | sort -u > "$RUNNER_TEMP/workers"
           test "$(wc -l < "$RUNNER_TEMP/workers" | tr -d ' ')" -eq 2
+
+      - name: Run llard E2E
+        env:
+          QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+          QINIU_PREFIX: ${{ secrets.QINIU_PREFIX }}
+        run: |
+          LLARD_E2E_BASE_URL="http://127.0.0.1:18080" \
+            LLARD_E2E_WORKERS="http://$WORKER_1:8080,http://$WORKER_2:8080" \
+            LLARD_E2E_CONTROLS="http://$WORKER_1:18081,http://$WORKER_2:18081" \
+            go test -v -ldflags="-checklinkname=0" ./testdata/llard-e2e -count=1
 
       - name: Stop llard workers and nginx
         if: always()
