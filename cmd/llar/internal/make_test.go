@@ -249,15 +249,15 @@ func TestOutputArtifactZipsMetadataDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read metadata entry: %v", err)
 		}
-		got, gotDeps, err := metadata.Decode(data, src)
+		got, err := metadata.Decode(data, src)
 		if err != nil {
 			t.Fatalf("decode metadata: %v", err)
 		}
-		if got != value {
-			t.Fatalf("metadata = %q, want %q", got, value)
+		if got.Metadata != value {
+			t.Fatalf("metadata = %q, want %q", got.Metadata, value)
 		}
-		if !reflect.DeepEqual(gotDeps, deps) {
-			t.Fatalf("deps = %+v, want %+v", gotDeps, deps)
+		if !reflect.DeepEqual(got.Deps, deps) {
+			t.Fatalf("deps = %+v, want %+v", got.Deps, deps)
 		}
 		return
 	}
@@ -273,15 +273,15 @@ func TestOutputArtifactTarGzMetadataDirectory(t *testing.T) {
 	}
 
 	files := readTarGz(t, dest)
-	got, deps, err := metadata.Decode(files[".llar/metadata.json"], src)
+	got, err := metadata.Decode(files[".llar/metadata.json"], src)
 	if err != nil {
 		t.Fatalf("decode metadata: %v", err)
 	}
-	if got != "-lfoo" {
-		t.Fatalf("metadata = %q, want %q", got, "-lfoo")
+	if got.Metadata != "-lfoo" {
+		t.Fatalf("metadata = %q, want %q", got.Metadata, "-lfoo")
 	}
-	if len(deps) != 0 {
-		t.Fatalf("deps = %+v, want none", deps)
+	if len(got.Deps) != 0 {
+		t.Fatalf("deps = %+v, want none", got.Deps)
 	}
 }
 

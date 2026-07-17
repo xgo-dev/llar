@@ -18,13 +18,19 @@ type file struct {
 	Deps     []string `json:"deps,omitempty"`
 }
 
+// Info contains artifact metadata and its dependencies.
+type Info struct {
+	Metadata string
+	Deps     []module.Version
+}
+
 // Encode creates an artifact metadata file.
-func Encode(value, installDir string, deps []module.Version) (json.RawMessage, error) {
-	value = normalize(value, installDir)
+func Encode(info Info, installDir string) (json.RawMessage, error) {
+	value := normalize(info.Metadata, installDir)
 	encoded := file{Metadata: &value}
-	if len(deps) > 0 {
-		encoded.Deps = make([]string, 0, len(deps))
-		for _, dep := range deps {
+	if len(info.Deps) > 0 {
+		encoded.Deps = make([]string, 0, len(info.Deps))
+		for _, dep := range info.Deps {
 			encoded.Deps = append(encoded.Deps, dep.Path+"@"+dep.Version)
 		}
 	}
@@ -36,27 +42,27 @@ func Encode(value, installDir string, deps []module.Version) (json.RawMessage, e
 }
 
 // Decode reads an artifact metadata file.
-func Decode(data []byte, installDir string) (string, []module.Version, error) {
+func Decode(data []byte, installDir string) (Info, error) {
 	var encoded file
 	if err := json.Unmarshal(data, &encoded); err != nil {
-		return "", nil, err
+		return Info{}, err
 	}
 	if encoded.Metadata == nil {
-		return "", nil, fmt.Errorf("metadata is required")
+		return Info{}, fmt.Errorf("metadata is required")
 	}
 	value, err := expand(*encoded.Metadata, installDir)
 	if err != nil {
-		return "", nil, err
+		return Info{}, err
 	}
 	deps := make([]module.Version, 0, len(encoded.Deps))
 	for _, dep := range encoded.Deps {
 		index := strings.LastIndexByte(dep, '@')
 		if index <= 0 || index == len(dep)-1 {
-			return "", nil, fmt.Errorf("invalid dependency %q", dep)
+			return Info{}, fmt.Errorf("invalid dependency %q", dep)
 		}
 		deps = append(deps, module.Version{Path: dep[:index], Version: dep[index+1:]})
 	}
-	return value, deps, nil
+	return Info{Metadata: value, Deps: deps}, nil
 }
 
 func normalize(value, installDir string) string {

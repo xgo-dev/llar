@@ -263,7 +263,7 @@ func artifactDeps(mods []*modules.Module) []module.Version {
 }
 
 func outputArtifact(srcDir, dest, value string, deps []module.Version) error {
-	body, err := metadata.Encode(value, srcDir, deps)
+	body, err := metadata.Encode(metadata.Info{Metadata: value, Deps: deps}, srcDir)
 	if err != nil {
 		return err
 	}

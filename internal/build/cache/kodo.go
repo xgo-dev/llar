@@ -96,11 +96,11 @@ func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
 	if err != nil {
 		return Entry{}, false, err
 	}
-	value, deps, err := metadata.Decode(data, installDir)
+	info, err := metadata.Decode(data, installDir)
 	if err != nil {
 		return Entry{}, false, err
 	}
-	return Entry{Metadata: value, Deps: deps}, true, nil
+	return Entry{Metadata: info.Metadata, Deps: info.Deps}, true, nil
 }
 
 func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry) (Entry, error) {
@@ -124,7 +124,10 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 	if err != nil {
 		return Entry{}, err
 	}
-	metadataJSON, err := metadata.Encode(entry.Metadata, installDir, entry.Deps)
+	metadataJSON, err := metadata.Encode(metadata.Info{
+		Metadata: entry.Metadata,
+		Deps:     entry.Deps,
+	}, installDir)
 	if err != nil {
 		return Entry{}, err
 	}

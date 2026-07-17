@@ -14,7 +14,7 @@ func TestEncodeDecode(t *testing.T) {
 	value := "-L" + buildDir + "/lib -Wl,-rpath," + buildDir + "/lib -lz"
 	deps := []module.Version{{Path: "madler/zlib", Version: "v1.3.1"}}
 
-	data, err := Encode(value, buildDir, deps)
+	data, err := Encode(Info{Metadata: value, Deps: deps}, buildDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,16 +25,16 @@ func TestEncodeDecode(t *testing.T) {
 		t.Fatalf("encoded metadata does not contain install template: %s", data)
 	}
 
-	got, gotDeps, err := Decode(data, installDir)
+	got, err := Decode(data, installDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := "-L" + installDir + "/lib -Wl,-rpath," + installDir + "/lib -lz"
-	if got != want {
-		t.Fatalf("Decode() metadata = %q, want %q", got, want)
+	if got.Metadata != want {
+		t.Fatalf("Decode() metadata = %q, want %q", got.Metadata, want)
 	}
-	if !reflect.DeepEqual(gotDeps, deps) {
-		t.Fatalf("Decode() deps = %+v, want %+v", gotDeps, deps)
+	if !reflect.DeepEqual(got.Deps, deps) {
+		t.Fatalf("Decode() deps = %+v, want %+v", got.Deps, deps)
 	}
 }
 
@@ -50,7 +50,7 @@ func TestDecodeErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, _, err := Decode([]byte(tt.data), t.TempDir()); err == nil {
+			if _, err := Decode([]byte(tt.data), t.TempDir()); err == nil {
 				t.Fatal("Decode() error = nil")
 			}
 		})
