@@ -82,13 +82,17 @@ func run() error {
 		WorkspaceDir: workspaceDir,
 		Artifacts:    artifacts,
 	})
+	handler := buildhttp.New(buildhttp.Options{
+		FormulaStore: formulaStore,
+		Cache:        buildCache,
+		Artifacts:    artifacts,
+		WorkspaceDir: workspaceDir,
+	})
 	server := &http.Server{
 		Addr: cfg.addr,
-		Handler: buildhttp.New(buildhttp.Options{
-			FormulaStore: formulaStore,
-			Cache:        buildCache,
-			Artifacts:    artifacts,
-			WorkspaceDir: workspaceDir,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("request method=%s uri=%s remote=%s", r.Method, r.URL.RequestURI(), r.RemoteAddr)
+			handler.ServeHTTP(w, r)
 		}),
 	}
 
