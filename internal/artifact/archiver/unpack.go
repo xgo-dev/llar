@@ -15,7 +15,7 @@ import (
 )
 
 // Unpack extracts an LLAR binary artifact into dst and returns its metainfo.
-func Unpack(src, dst string) (json.RawMessage, error) {
+func Unpack(src, dst string) (metadata json.RawMessage, err error) {
 	switch {
 	case strings.HasSuffix(src, ".tar.gz"):
 		return unpackTarGz(src, dst)
