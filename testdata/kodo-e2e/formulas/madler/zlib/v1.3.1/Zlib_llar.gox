@@ -1,5 +1,3 @@
-import "os"
-
 id "madler/zlib"
 
 fromVer "v1.3.1"
@@ -11,17 +9,19 @@ onBuild (ctx, proj, out) => {
 		return
 	}
 
-	exec "mkdir", "-p", installDir + "/include", installDir + "/lib"
-	if lastErr != nil {
-		out.addErr lastErr
-		return
-	}
-	err = os.writeFile(installDir+"/include/zlib.h", []byte("/* zlib e2e fixture */\n"), 0o644)
+	a := autotools.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+
+	err = a.configure("--static")
 	if err != nil {
 		out.addErr err
 		return
 	}
-	err = os.writeFile(installDir+"/lib/libz.a", []byte("zlib fixture archive\n"), 0o644)
+	err = a.build()
+	if err != nil {
+		out.addErr err
+		return
+	}
+	err = a.install()
 	if err != nil {
 		out.addErr err
 		return

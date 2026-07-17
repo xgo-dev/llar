@@ -60,7 +60,7 @@ jobs:
           QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
           QINIU_PUBLIC_DOMAIN: ${{ secrets.QINIU_PUBLIC_DOMAIN }}
           QINIU_PREFIX: ${{ secrets.QINIU_PREFIX }}
-        run: go test -v -ldflags="-checklinkname=0" -coverpkg=github.com/goplus/llar/internal/build/cache -coverprofile kodo-cache-coverage.out ./internal/build/cache ./testdata/kodo-e2e -count=1
+        run: go test -v -ldflags="-checklinkname=0" -coverpkg=github.com/goplus/llar/internal/build/cache -coverprofile kodo-cache-coverage.out ./internal/build/cache ./internal/build/http ./testdata/kodo-e2e -count=1
 
       - name: Upload Kodo cache coverage
         uses: codecov/codecov-action@v5
