@@ -22,6 +22,7 @@ func Pack(srcDir, dst string, metainfo json.RawMessage) error {
 
 // PackFS writes src as an LLAR binary artifact at dst.
 // The metainfo bytes are written verbatim to .llar/metadata.json.
+// TODO: Copy symlink targets as regular files instead of rejecting link entries.
 func PackFS(src fs.FS, dst string, metainfo json.RawMessage) error {
 	if !json.Valid(metainfo) {
 		return fmt.Errorf("invalid artifact metainfo JSON")
