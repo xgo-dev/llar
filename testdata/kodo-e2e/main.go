@@ -324,8 +324,8 @@ func (s *suite) restoreRejectsBadArtifactMetadata(ctx context.Context) error {
 	if _, err := s.artifacts.Put(ctx, artifactKey(key), badType); err != nil {
 		return fmt.Errorf("write bad type artifact: %w", err)
 	}
-	if _, _, err := c.Get(ctx, key); err == nil || !strings.Contains(err.Error(), "unsupported artifact type") {
-		return fmt.Errorf("Get with bad artifact type error = %v, want unsupported artifact type", err)
+	if _, _, err := c.Get(ctx, key); err == nil || !strings.Contains(err.Error(), "unsupported artifact") {
+		return fmt.Errorf("Get with bad artifact type error = %v, want unsupported artifact", err)
 	}
 	if _, err := s.artifacts.Put(ctx, artifactKey(key), s.baseArtifact); err != nil {
 		return fmt.Errorf("restore artifact type: %w", err)
