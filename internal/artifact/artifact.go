@@ -21,7 +21,6 @@ type Source struct {
 type Artifact struct {
 	Source   Source `json:"source"`
 	Type     string `json:"type"`
-	Metadata string `json:"metadata"`
 	Checksum string `json:"checksum"`
 }
 

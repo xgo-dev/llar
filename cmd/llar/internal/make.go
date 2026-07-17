@@ -15,6 +15,7 @@ import (
 	"github.com/goplus/llar/internal/artifact/archiver"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/modules/modlocal"
 	"github.com/goplus/llar/internal/vcs"
@@ -25,11 +26,6 @@ import (
 var makeVerbose bool
 var makeOutput string
 var makeJSON bool
-
-type artifactMetadata struct {
-	Metadata string   `json:"metadata"`
-	Deps     []string `json:"deps,omitempty"`
-}
 
 type makeJSONDep struct {
 	Path    string `json:"path"`
@@ -266,24 +262,10 @@ func artifactDeps(mods []*modules.Module) []module.Version {
 	return deps
 }
 
-func artifactDepStrings(deps []module.Version) []string {
-	if len(deps) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(deps))
-	for _, dep := range deps {
-		out = append(out, dep.Path+"@"+dep.Version)
-	}
-	return out
-}
-
-func outputArtifact(srcDir, dest, metadata string, deps []module.Version) error {
-	body, err := json.MarshalIndent(artifactMetadata{
-		Metadata: metadata,
-		Deps:     artifactDepStrings(deps),
-	}, "", "  ")
+func outputArtifact(srcDir, dest, value string, deps []module.Version) error {
+	body, err := metadata.Encode(value, srcDir, deps)
 	if err != nil {
 		return err
 	}
-	return archiver.Pack(srcDir, dest, json.RawMessage(append(body, '\n')))
+	return archiver.Pack(srcDir, dest, body)
 }
