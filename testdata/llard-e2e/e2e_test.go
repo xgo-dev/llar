@@ -87,6 +87,7 @@ type suite struct {
 	query      string
 	wantOutput []string
 	coldZlib   artifactMessage
+	upstreams  map[string]struct{}
 }
 
 func TestLLARDE2E(t *testing.T) {
@@ -128,6 +129,10 @@ func TestLLARDE2E(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), e2eTimeout)
 	defer cancel()
+	s.upstreams, err = s.workerUpstreams(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := s.deleteArtifacts(ctx, zlibTarget, libpngTarget, cjsonTarget); err != nil {
 		t.Fatal(err)
 	}
@@ -222,6 +227,9 @@ func (s *suite) coldZlibBuild(ctx context.Context) error {
 	}
 	if got.upstream == "" {
 		return errors.New("nginx response has no X-Upstream-Addr")
+	}
+	if _, ok := s.upstreams[got.upstream]; !ok {
+		return fmt.Errorf("nginx upstream = %q, workers = %v", got.upstream, s.upstreams)
 	}
 	if err := containsInOrder(got.infos[1:], s.wantOutput); err != nil {
 		return fmt.Errorf("zlib info output: %w", err)
@@ -320,6 +328,9 @@ func (s *suite) concurrentZlibBuild(ctx context.Context) error {
 
 	wantArtifact := responses[0].artifacts[0]
 	wantUpstream := responses[0].upstream
+	if _, ok := s.upstreams[wantUpstream]; !ok {
+		return fmt.Errorf("concurrent nginx upstream = %q, workers = %v", wantUpstream, s.upstreams)
+	}
 	fullOutput := false
 	for i, got := range responses {
 		if got.upstream != wantUpstream {
@@ -631,6 +642,38 @@ func (s *suite) buildCounts(ctx context.Context) (map[string]int, error) {
 		}
 	}
 	return counts, nil
+}
+
+func (s *suite) workerUpstreams(ctx context.Context) (map[string]struct{}, error) {
+	upstreams := make(map[string]struct{}, len(s.cfg.controls))
+	for _, control := range s.cfg.controls {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, control+"/identity", nil)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := s.client.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("%s/identity returned %s", control, resp.Status)
+		}
+		var upstream string
+		err = json.NewDecoder(resp.Body).Decode(&upstream)
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if upstream == "" {
+			return nil, fmt.Errorf("%s/identity returned an empty upstream", control)
+		}
+		upstreams[upstream] = struct{}{}
+	}
+	if len(upstreams) != len(s.cfg.controls) {
+		return nil, fmt.Errorf("worker upstreams = %v, want %d unique addresses", upstreams, len(s.cfg.controls))
+	}
+	return upstreams, nil
 }
 
 func (s *suite) deleteArtifacts(ctx context.Context, targets ...target) error {
