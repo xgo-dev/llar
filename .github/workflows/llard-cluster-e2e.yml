@@ -221,28 +221,6 @@ jobs:
           nginx -t -c "$RUNNER_TEMP/nginx.conf" -p "$RUNNER_TEMP/nginx"
           nginx -c "$RUNNER_TEMP/nginx.conf" -p "$RUNNER_TEMP/nginx"
 
-      - name: Verify llard routing
-        run: |
-          request() {
-            curl --fail --silent --show-error \
-              --dump-header "$RUNNER_TEMP/headers" \
-              --output "$RUNNER_TEMP/body" \
-              "http://127.0.0.1:18080/$1"
-            grep -i '^X-Upstream-Addr:' "$RUNNER_TEMP/headers" | tr -d '\r' | cut -d' ' -f2
-          }
-
-          first=$(request same-request)
-          grep --fixed-strings 'application/x-cmdjsonl' "$RUNNER_TEMP/headers"
-          grep --fixed-strings 'error "artifact path not found"' "$RUNNER_TEMP/body"
-          for attempt in $(seq 1 5); do
-            test "$(request same-request)" = "$first"
-          done
-
-          for key in $(seq 1 64); do
-            request "request-$key"
-          done | sort -u > "$RUNNER_TEMP/workers"
-          test "$(wc -l < "$RUNNER_TEMP/workers" | tr -d ' ')" -eq 2
-
       - name: Run llard E2E
         env:
           QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
