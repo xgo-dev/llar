@@ -1,9 +1,6 @@
 package cache
 
 import (
-	"archive/tar"
-	"archive/zip"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -19,6 +16,8 @@ import (
 	"time"
 
 	"github.com/goplus/llar/internal/artifact"
+	"github.com/goplus/llar/internal/artifact/archiver"
+	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/mod/module"
 	qiniuclient "github.com/qiniu/go-sdk/v7/client"
 	"github.com/qiniu/go-sdk/v7/storagev2/credentials"
@@ -85,13 +84,23 @@ func (c *kodoCache) Get(ctx context.Context, key Key) (Entry, bool, error) {
 	if err != nil {
 		return Entry{}, false, err
 	}
-	if c.workspaceDir != "" {
-		objectName := c.objectName(key)
-		if err := c.restore(ctx, key, objectName, art.Type, art.Checksum); err != nil {
-			return Entry{}, false, err
-		}
+	if c.workspaceDir == "" {
+		return Entry{}, false, errors.New("kodo cache workspace dir is required")
 	}
-	return Entry{Metadata: art.Metadata}, true, nil
+	objectName := c.objectName(key)
+	data, err := c.restore(ctx, key, objectName, art.Type, art.Checksum)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	installDir, err := c.installDir(key)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	info, err := metadata.Decode(data, installDir)
+	if err != nil {
+		return Entry{}, false, err
+	}
+	return Entry{Metadata: info.Metadata, Deps: info.Deps}, true, nil
 }
 
 func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry) (Entry, error) {
@@ -107,16 +116,28 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 		return Entry{}, err
 	}
 	defer os.Remove(file.Name())
-
-	hash := sha256.New()
-	if err := writeTarGzip(io.MultiWriter(file, hash), output); err != nil {
-		_ = file.Close()
-		return Entry{}, err
-	}
 	if err := file.Close(); err != nil {
 		return Entry{}, err
 	}
-	checksum := hex.EncodeToString(hash.Sum(nil))
+
+	installDir, err := c.installDir(key)
+	if err != nil {
+		return Entry{}, err
+	}
+	metadataJSON, err := metadata.Encode(metadata.Info{
+		Metadata: entry.Metadata,
+		Deps:     entry.Deps,
+	}, installDir)
+	if err != nil {
+		return Entry{}, err
+	}
+	if err := archiver.PackFS(output, file.Name(), metadataJSON); err != nil {
+		return Entry{}, err
+	}
+	checksum, err := fileSHA256(file.Name())
+	if err != nil {
+		return Entry{}, err
+	}
 	sourceURL, err := kodoSourceURL(c.publicDomain, objectName)
 	if err != nil {
 		return Entry{}, err
@@ -149,7 +170,6 @@ func (c *kodoCache) Put(ctx context.Context, key Key, output fs.FS, entry Entry)
 			URL:  sourceURL,
 		},
 		Type:     "tar.gz",
-		Metadata: entry.Metadata,
 		Checksum: checksum,
 	}); err != nil {
 		return Entry{}, err
@@ -174,19 +194,19 @@ func (c *kodoCache) installDir(key Key) (string, error) {
 	return filepath.Join(c.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, key.Module.Version, key.Matrix)), nil
 }
 
-func (c *kodoCache) restore(ctx context.Context, key Key, objectName, artifactType, checksum string) error {
+func (c *kodoCache) restore(ctx context.Context, key Key, objectName, artifactType, checksum string) ([]byte, error) {
 	installDir, err := c.installDir(key)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	file, err := os.CreateTemp("", "llar-kodo-restore-*.tar.gz")
+	file, err := os.CreateTemp("", "llar-kodo-restore-*."+path.Base(artifactType))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fileName := file.Name()
 	if err := file.Close(); err != nil {
 		_ = os.Remove(fileName)
-		return err
+		return nil, err
 	}
 	defer os.Remove(fileName)
 
@@ -196,24 +216,24 @@ func (c *kodoCache) restore(ctx context.Context, key Key, objectName, artifactTy
 		},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if checksum != "" {
 		got, err := fileSHA256(fileName)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if got != checksum {
-			return fmt.Errorf("kodo artifact checksum = %s, want %s", got, checksum)
+			return nil, fmt.Errorf("kodo artifact checksum = %s, want %s", got, checksum)
 		}
 	}
 	if err := os.RemoveAll(installDir); err != nil {
-		return err
+		return nil, err
 	}
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
-		return err
+		return nil, err
 	}
-	return extractArtifact(fileName, artifactType, installDir)
+	return archiver.Unpack(fileName, installDir)
 }
 
 func normalizePublicDomain(domain string) string {
@@ -260,196 +280,4 @@ func fileSHA256(name string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-func writeTarGzip(w io.Writer, src fs.FS) error {
-	gzw := gzip.NewWriter(w)
-	tw := tar.NewWriter(gzw)
-
-	if err := fs.WalkDir(src, ".", func(name string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if name == "." {
-			return nil
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && !info.Mode().IsRegular() {
-			return fmt.Errorf("archive %s: unsupported file mode %s", name, info.Mode())
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		header.Name = name
-		if info.IsDir() && !strings.HasSuffix(header.Name, "/") {
-			header.Name += "/"
-		}
-		header.ModTime = time.Unix(0, 0)
-		header.AccessTime = time.Unix(0, 0)
-		header.ChangeTime = time.Unix(0, 0)
-		header.Uid = 0
-		header.Gid = 0
-		header.Uname = ""
-		header.Gname = ""
-
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
-
-		file, err := src.Open(name)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(tw, file)
-		closeErr := file.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	}); err != nil {
-		_ = tw.Close()
-		_ = gzw.Close()
-		return err
-	}
-
-	if err := tw.Close(); err != nil {
-		_ = gzw.Close()
-		return err
-	}
-	return gzw.Close()
-}
-
-func extractArtifact(fileName, artifactType, dst string) error {
-	switch artifactType {
-	case "tar.gz":
-		file, err := os.Open(fileName)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-		return extractTarGzip(file, dst)
-	case "zip":
-		return extractZip(fileName, dst)
-	default:
-		return fmt.Errorf("unsupported artifact type %q", artifactType)
-	}
-}
-
-func extractTarGzip(r io.Reader, dst string) error {
-	gzr, err := gzip.NewReader(r)
-	if err != nil {
-		return err
-	}
-	defer gzr.Close()
-
-	tr := tar.NewReader(gzr)
-	for {
-		header, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		name, err := cleanArchiveName(header.Name)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, name)
-
-		switch header.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(target, header.FileInfo().Mode().Perm()); err != nil {
-				return err
-			}
-		case tar.TypeReg, tar.TypeRegA:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, header.FileInfo().Mode().Perm())
-			if err != nil {
-				return err
-			}
-			_, copyErr := io.Copy(file, tr)
-			closeErr := file.Close()
-			if copyErr != nil {
-				return copyErr
-			}
-			if closeErr != nil {
-				return closeErr
-			}
-		default:
-			return fmt.Errorf("extract %s: unsupported tar type %d", header.Name, header.Typeflag)
-		}
-	}
-}
-
-func extractZip(fileName, dst string) error {
-	zr, err := zip.OpenReader(fileName)
-	if err != nil {
-		return err
-	}
-	defer zr.Close()
-
-	for _, entry := range zr.File {
-		name, err := cleanArchiveName(entry.Name)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, name)
-		info := entry.FileInfo()
-		mode := info.Mode()
-
-		if info.IsDir() {
-			if err := os.MkdirAll(target, mode.Perm()); err != nil {
-				return err
-			}
-			continue
-		}
-		if !mode.IsRegular() {
-			return fmt.Errorf("extract %s: unsupported zip mode %s", entry.Name, mode)
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		src, err := entry.Open()
-		if err != nil {
-			return err
-		}
-		file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
-		if err != nil {
-			_ = src.Close()
-			return err
-		}
-		_, copyErr := io.Copy(file, src)
-		closeErr := file.Close()
-		srcCloseErr := src.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if srcCloseErr != nil {
-			return srcCloseErr
-		}
-	}
-	return nil
-}
-
-func cleanArchiveName(name string) (string, error) {
-	name = filepath.Clean(filepath.FromSlash(name))
-	if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("unsafe archive path %q", name)
-	}
-	return name, nil
 }

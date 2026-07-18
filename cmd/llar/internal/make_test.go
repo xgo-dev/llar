@@ -22,6 +22,7 @@ import (
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/mod/module"
 )
@@ -223,8 +224,9 @@ func TestOutputArtifactZipsMetadataDirectory(t *testing.T) {
 	src := setupTestSrcDir(t)
 	dest := filepath.Join(t.TempDir(), "out.zip")
 	deps := []module.Version{{Path: "madler/zlib", Version: "v1.3.1"}}
+	value := "-L" + filepath.Join(src, "lib") + " -lz"
 
-	if err := outputArtifact(src, dest, "-lfoo", deps); err != nil {
+	if err := outputArtifact(src, dest, value, deps); err != nil {
 		t.Fatalf("outputArtifact: %v", err)
 	}
 
@@ -247,16 +249,15 @@ func TestOutputArtifactZipsMetadataDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read metadata entry: %v", err)
 		}
-		var got artifactMetadata
-		if err := json.Unmarshal(data, &got); err != nil {
-			t.Fatalf("metadata.json is invalid JSON: %v", err)
+		got, err := metadata.Decode(data, src)
+		if err != nil {
+			t.Fatalf("decode metadata: %v", err)
 		}
-		if got.Metadata != "-lfoo" {
-			t.Fatalf("metadata = %q, want %q", got.Metadata, "-lfoo")
+		if got.Metadata != value {
+			t.Fatalf("metadata = %q, want %q", got.Metadata, value)
 		}
-		wantDeps := []string{"madler/zlib@v1.3.1"}
-		if !reflect.DeepEqual(got.Deps, wantDeps) {
-			t.Fatalf("deps = %+v, want %+v", got.Deps, wantDeps)
+		if !reflect.DeepEqual(got.Deps, deps) {
+			t.Fatalf("deps = %+v, want %+v", got.Deps, deps)
 		}
 		return
 	}
@@ -272,12 +273,15 @@ func TestOutputArtifactTarGzMetadataDirectory(t *testing.T) {
 	}
 
 	files := readTarGz(t, dest)
-	var got artifactMetadata
-	if err := json.Unmarshal(files[".llar/metadata.json"], &got); err != nil {
-		t.Fatalf("metadata.json is invalid JSON: %v", err)
+	got, err := metadata.Decode(files[".llar/metadata.json"], src)
+	if err != nil {
+		t.Fatalf("decode metadata: %v", err)
 	}
 	if got.Metadata != "-lfoo" {
 		t.Fatalf("metadata = %q, want %q", got.Metadata, "-lfoo")
+	}
+	if len(got.Deps) != 0 {
+		t.Fatalf("deps = %+v, want none", got.Deps)
 	}
 }
 
@@ -739,7 +743,9 @@ func TestMakeLocal_BuildSuccess(t *testing.T) {
 	// Isolate workspace and pre-populate cache
 	workspaceDir := isolatedWorkspaceDir(t)
 	matrixStr := computeMatrixStr()
-	prepopulateCache(t, workspaceDir, "test/liba", "1.0.0", matrixStr, "-lA")
+	installDir := filepath.Join(workspaceDir, fmt.Sprintf("test/liba@1.0.0-%s", matrixStr))
+	value := "-L" + filepath.Join(installDir, "lib") + " -lA"
+	prepopulateCache(t, workspaceDir, "test/liba", "1.0.0", matrixStr, value)
 
 	out, err := runMakeCmd(t, "-v", "./@1.0.0")
 	if err != nil {
@@ -748,8 +754,8 @@ func TestMakeLocal_BuildSuccess(t *testing.T) {
 
 	// Verify stdout contains exactly the metadata
 	got := strings.TrimSpace(out)
-	if got != "-lA" {
-		t.Errorf("stdout = %q, want %q", got, "-lA")
+	if got != value {
+		t.Errorf("stdout = %q, want %q", got, value)
 	}
 
 	// Verify cache file still exists in workspace
@@ -759,7 +765,6 @@ func TestMakeLocal_BuildSuccess(t *testing.T) {
 	}
 
 	// Verify install dir was used
-	installDir := filepath.Join(workspaceDir, fmt.Sprintf("test/liba@1.0.0-%s", matrixStr))
 	libFile := filepath.Join(installDir, "lib", "liba.a")
 	data, err := os.ReadFile(libFile)
 	if err != nil {

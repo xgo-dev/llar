@@ -37,7 +37,6 @@ func TestKodoArtifactMetadataRoundTrip(t *testing.T) {
 	want := Artifact{
 		Source:   Source{Type: "kodo", URL: "https://example.com/cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"},
 		Type:     "tar.gz",
-		Metadata: "-lz",
 		Checksum: "abc",
 	}
 	raw, err := encodeKodoArtifact(want)
@@ -87,7 +86,6 @@ func TestKodoArtifactGetPutDeleteWithFakeKodo(t *testing.T) {
 	want := Artifact{
 		Source:   Source{Type: "kodo", URL: "https://example.com/cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"},
 		Type:     "tar.gz",
-		Metadata: "-lz",
 		Checksum: "abc",
 	}
 	objectName := "cache/madler/zlib/v1.3.2/amd64-linux.tar.gz"
@@ -207,7 +205,6 @@ func TestKodoArtifactE2E(t *testing.T) {
 	want := Artifact{
 		Source:   Source{Type: "kodo", URL: "https://example.com/" + objectName},
 		Type:     "tar.gz",
-		Metadata: "-lz",
 		Checksum: "sha256-test",
 	}
 	if err := uploadKodoArtifactObject(ctx, t, accessKey, secretKey, bucket, objectName); err != nil {

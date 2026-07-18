@@ -1,9 +1,12 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -321,8 +324,8 @@ func (s *suite) restoreRejectsBadArtifactMetadata(ctx context.Context) error {
 	if _, err := s.artifacts.Put(ctx, artifactKey(key), badType); err != nil {
 		return fmt.Errorf("write bad type artifact: %w", err)
 	}
-	if _, _, err := c.Get(ctx, key); err == nil || !strings.Contains(err.Error(), "unsupported artifact type") {
-		return fmt.Errorf("Get with bad artifact type error = %v, want unsupported artifact type", err)
+	if _, _, err := c.Get(ctx, key); err == nil || !strings.Contains(err.Error(), "unsupported artifact") {
+		return fmt.Errorf("Get with bad artifact type error = %v, want unsupported artifact", err)
 	}
 	if _, err := s.artifacts.Put(ctx, artifactKey(key), s.baseArtifact); err != nil {
 		return fmt.Errorf("restore artifact type: %w", err)
@@ -579,9 +582,6 @@ func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, me
 	if got.Type != "tar.gz" {
 		return artifact.Artifact{}, fmt.Errorf("artifact type = %q, want tar.gz", got.Type)
 	}
-	if got.Metadata != metadata {
-		return artifact.Artifact{}, fmt.Errorf("artifact metadata = %q, want %q", got.Metadata, metadata)
-	}
 	if len(got.Checksum) != 64 {
 		return artifact.Artifact{}, fmt.Errorf("artifact checksum = %q, want sha256 hex", got.Checksum)
 	}
@@ -599,7 +599,7 @@ func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, me
 		return artifact.Artifact{}, fmt.Errorf("artifact source url = %q, want %q", got.Source.URL, wantURL)
 	}
 
-	if err := s.kodo.assertChecksum(ctx, objectName, got.Checksum); err != nil {
+	if err := s.kodo.assertChecksum(ctx, objectName, got.Checksum, metadata); err != nil {
 		return artifact.Artifact{}, err
 	}
 	if err := assertPublicURLChecksum(ctx, got.Source.URL, got.Checksum); err != nil {
@@ -691,7 +691,7 @@ func newKodoClient(cfg config) *kodoClient {
 	}
 }
 
-func (c *kodoClient) assertChecksum(ctx context.Context, objectName, checksum string) error {
+func (c *kodoClient) assertChecksum(ctx context.Context, objectName, checksum, metadata string) error {
 	file, err := os.CreateTemp("", "llar-kodo-e2e-download-*.tar.gz")
 	if err != nil {
 		return err
@@ -717,7 +717,40 @@ func (c *kodoClient) assertChecksum(ctx context.Context, objectName, checksum st
 	if got != checksum {
 		return fmt.Errorf("kodo object %s checksum = %s, want %s", objectName, got, checksum)
 	}
-	return nil
+
+	archiveFile, err := os.Open(name)
+	if err != nil {
+		return err
+	}
+	defer archiveFile.Close()
+	gz, err := gzip.NewReader(archiveFile)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("kodo object %s is missing .llar/metadata.json", objectName)
+		}
+		if err != nil {
+			return err
+		}
+		if header.Name != ".llar/metadata.json" {
+			continue
+		}
+		var got struct {
+			Metadata string `json:"metadata"`
+		}
+		if err := json.NewDecoder(tr).Decode(&got); err != nil {
+			return err
+		}
+		if got.Metadata != metadata {
+			return fmt.Errorf("artifact metadata = %q, want %q", got.Metadata, metadata)
+		}
+		return nil
+	}
 }
 
 func (c *kodoClient) objectCount(ctx context.Context, prefix string) (int64, error) {
