@@ -473,17 +473,20 @@ func (s *suite) concurrentDuplicate(ctx context.Context) error {
 
 func (s *suite) concurrentSharedDependency(ctx context.Context) error {
 	matrix := s.cfg.matrix + "-shareddep"
-	workspace := mustTempDir("llar-kodo-e2e-shared-")
-	c := s.newCache(workspace)
 
 	results := make(chan namedBuildResult, len(s.cfg.sharedTargets))
 	start := make(chan struct{})
-	for _, target := range s.cfg.sharedTargets {
-		go func(target module.Version) {
+	// Each workspace/cache pair models a separate llard. Sharing an install
+	// directory would turn the expected duplicate Kodo builds into a local file race.
+	caches := make([]*countingCache, len(s.cfg.sharedTargets))
+	for i, target := range s.cfg.sharedTargets {
+		workspace := mustTempDir("llar-kodo-e2e-shared-")
+		caches[i] = s.newCache(workspace)
+		go func(target module.Version, workspace string, c *countingCache) {
 			<-start
 			got, err := s.build(ctx, target, matrix, workspace, c)
 			results <- namedBuildResult{target: target, result: got, err: err}
-		}(target)
+		}(target, workspace, caches[i])
 	}
 	close(start)
 
@@ -498,13 +501,17 @@ func (s *suite) concurrentSharedDependency(ctx context.Context) error {
 		}
 		gotByTarget[targetKey(result.target)] = result.result
 	}
-	if c.totalPuts() != 4 {
-		return fmt.Errorf("cache Put calls = %d, want 4", c.totalPuts())
-	}
-
 	zlib := module.Version{Path: "madler/zlib", Version: "v1.3.1"}
-	if c.putCount(cacheKey(zlib, matrix)) != 2 {
-		return fmt.Errorf("shared dependency Put calls = %d, want 2", c.putCount(cacheKey(zlib, matrix)))
+	var totalPuts, zlibPuts int
+	for _, c := range caches {
+		totalPuts += c.totalPuts()
+		zlibPuts += c.putCount(cacheKey(zlib, matrix))
+	}
+	if totalPuts != 4 {
+		return fmt.Errorf("cache Put calls = %d, want 4", totalPuts)
+	}
+	if zlibPuts != 2 {
+		return fmt.Errorf("shared dependency Put calls = %d, want 2", zlibPuts)
 	}
 	if _, err := s.assertStoredArtifact(ctx, cacheKey(zlib, matrix), "-lz"); err != nil {
 		return err
