@@ -5,7 +5,6 @@
 # LLAR
 
 [![Test](https://github.com/goplus/llar/actions/workflows/go.yml/badge.svg)](https://github.com/goplus/llar/actions/workflows/go.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/goplus/llar)](https://goreportcard.com/report/github.com/goplus/llar)
 [![codecov](https://codecov.io/gh/goplus/llar/branch/main/graph/badge.svg)](https://codecov.io/gh/goplus/llar)
 [![Language](https://img.shields.io/badge/language-XGo-blue.svg)](https://github.com/goplus/gop)
 
