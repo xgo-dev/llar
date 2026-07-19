@@ -192,7 +192,7 @@ func parseRequest(r *http.Request) (request, error) {
 	if len(query) == 0 {
 		return request{}, fmt.Errorf("build matrix is required")
 	}
-	require := make(map[string][]string, len(query))
+	var require, options map[string][]string
 	for key, values := range query {
 		if key == "" {
 			return request{}, fmt.Errorf("matrix key is required")
@@ -200,9 +200,21 @@ func parseRequest(r *http.Request) (request, error) {
 		if len(values) != 1 || values[0] == "" {
 			return request{}, fmt.Errorf("matrix %q requires exactly one value", key)
 		}
-		require[key] = []string{values[0]}
+		// Requests carry a flat matrix. Platform dimensions propagate to
+		// dependencies; all other dimensions are package build options.
+		if key == "os" || key == "arch" {
+			if require == nil {
+				require = make(map[string][]string)
+			}
+			require[key] = []string{values[0]}
+		} else {
+			if options == nil {
+				options = make(map[string][]string)
+			}
+			options[key] = []string{values[0]}
+		}
 	}
-	matrix := formula.Matrix{Require: require}
+	matrix := formula.Matrix{Require: require, Options: options}
 	combinations := matrix.Combinations()
 	if len(combinations) == 0 {
 		return request{}, fmt.Errorf("build matrix is required")

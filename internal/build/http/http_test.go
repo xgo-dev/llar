@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -26,25 +27,38 @@ import (
 
 func TestParseRequest(t *testing.T) {
 	tests := []struct {
-		name       string
-		target     string
-		wantModule string
-		wantVer    string
-		wantMatrix string
-		wantErr    string
+		name        string
+		target      string
+		wantModule  string
+		wantVer     string
+		wantMatrix  string
+		wantRequire map[string][]string
+		wantOptions map[string][]string
+		wantErr     string
 	}{
 		{
-			name:       "module and version",
-			target:     "/v1/artifacts/madler/zlib@v1.3.1?os=linux&arch=amd64",
-			wantModule: "madler/zlib",
-			wantVer:    "v1.3.1",
-			wantMatrix: "amd64-linux",
+			name:        "module and version",
+			target:      "/v1/artifacts/madler/zlib@v1.3.1?os=linux&arch=amd64",
+			wantModule:  "madler/zlib",
+			wantVer:     "v1.3.1",
+			wantMatrix:  "amd64-linux",
+			wantRequire: map[string][]string{"arch": {"amd64"}, "os": {"linux"}},
 		},
 		{
-			name:       "latest version",
-			target:     "/v1/artifacts/madler/zlib?os=linux",
-			wantModule: "madler/zlib",
-			wantMatrix: "linux",
+			name:        "latest version",
+			target:      "/v1/artifacts/madler/zlib?os=linux",
+			wantModule:  "madler/zlib",
+			wantMatrix:  "linux",
+			wantRequire: map[string][]string{"os": {"linux"}},
+		},
+		{
+			name:        "require and options",
+			target:      "/v1/artifacts/madler/zlib@v1.3.1?os=linux&arch=amd64&debug=OFF&shared=ON",
+			wantModule:  "madler/zlib",
+			wantVer:     "v1.3.1",
+			wantMatrix:  "amd64-linux|OFF-ON",
+			wantRequire: map[string][]string{"arch": {"amd64"}, "os": {"linux"}},
+			wantOptions: map[string][]string{"debug": {"OFF"}, "shared": {"ON"}},
 		},
 		{name: "wrong path", target: "/v1/modules/madler/zlib?os=linux", wantErr: "artifact path not found"},
 		{name: "missing module", target: "/v1/artifacts/?os=linux", wantErr: "module is required"},
@@ -71,12 +85,19 @@ func TestParseRequest(t *testing.T) {
 			if req.module != tt.wantModule || req.version != tt.wantVer || req.matrixStr != tt.wantMatrix {
 				t.Fatalf("parseRequest = module %q, version %q, matrix %q", req.module, req.version, req.matrixStr)
 			}
+			if !reflect.DeepEqual(req.matrix.Require, tt.wantRequire) || !reflect.DeepEqual(req.matrix.Options, tt.wantOptions) {
+				t.Fatalf("parseRequest matrix = %#v, want require %#v options %#v", req.matrix, tt.wantRequire, tt.wantOptions)
+			}
 			if requestKey(req) != moduleID(req.module, req.version, req.query) {
 				t.Fatalf("requestKey = %q", requestKey(req))
 			}
 			for key, values := range req.query {
 				values[0] = "changed"
-				if req.matrix.Require[key][0] == "changed" {
+				matrixValues := req.matrix.Options[key]
+				if key == "os" || key == "arch" {
+					matrixValues = req.matrix.Require[key]
+				}
+				if matrixValues[0] == "changed" {
 					t.Fatalf("request query aliases matrix value for %q", key)
 				}
 				break
