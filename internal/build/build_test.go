@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -371,6 +372,135 @@ func (c *recordingCache) Put(ctx context.Context, key cache.Key, output fs.FS, e
 	return entry, nil
 }
 
+type graphLockStore struct {
+	held     map[string]bool
+	events   []string
+	failPath string
+	failErr  error
+}
+
+func (s *graphLockStore) ModuleFS(context.Context, string) (fs.FS, error) {
+	return nil, errors.New("unexpected ModuleFS")
+}
+
+func (s *graphLockStore) LockModule(path string) (func(), error) {
+	s.events = append(s.events, "lock "+path)
+	if path == s.failPath {
+		return nil, s.failErr
+	}
+	if s.held == nil {
+		s.held = make(map[string]bool)
+	}
+	if s.held[path] {
+		return nil, fmt.Errorf("module %s is already locked", path)
+	}
+	s.held[path] = true
+	return func() {
+		delete(s.held, path)
+		s.events = append(s.events, "unlock "+path)
+	}, nil
+}
+
+type graphLockCache struct {
+	store *graphLockStore
+	paths []string
+	gets  int
+}
+
+func (c *graphLockCache) Get(_ context.Context, _ cache.Key) (cache.Entry, bool, error) {
+	for _, path := range c.paths {
+		if !c.store.held[path] {
+			return cache.Entry{}, false, fmt.Errorf("module %s is not locked", path)
+		}
+	}
+	c.gets++
+	return cache.Entry{Metadata: "cached"}, true, nil
+}
+
+func (*graphLockCache) Put(context.Context, cache.Key, fs.FS, cache.Entry) (cache.Entry, error) {
+	return cache.Entry{}, errors.New("unexpected cache Put")
+}
+
+type oppositeGraphLocks struct {
+	mu           sync.Mutex
+	locks        map[string]chan struct{}
+	attempts     [2]string
+	attempted    chan struct{}
+	acquired     int
+	bothAcquired chan struct{}
+}
+
+func newOppositeGraphLocks() *oppositeGraphLocks {
+	return &oppositeGraphLocks{
+		locks:        make(map[string]chan struct{}),
+		attempted:    make(chan struct{}),
+		bothAcquired: make(chan struct{}),
+	}
+}
+
+func (l *oppositeGraphLocks) lock(path string) chan struct{} {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	lock := l.locks[path]
+	if lock == nil {
+		lock = make(chan struct{}, 1)
+		lock <- struct{}{}
+		l.locks[path] = lock
+	}
+	return lock
+}
+
+func (l *oppositeGraphLocks) recordAttempt(id int, path string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.attempts[id] = path
+	if l.attempts[0] != "" && l.attempts[1] != "" {
+		close(l.attempted)
+	}
+}
+
+func (l *oppositeGraphLocks) attemptsDiffer() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.attempts[0] != l.attempts[1]
+}
+
+func (l *oppositeGraphLocks) recordAcquired() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.acquired++
+	if l.acquired == 2 {
+		close(l.bothAcquired)
+	}
+}
+
+type oppositeGraphStore struct {
+	id    int
+	locks *oppositeGraphLocks
+	seen  bool
+}
+
+func (*oppositeGraphStore) ModuleFS(context.Context, string) (fs.FS, error) {
+	return nil, errors.New("unexpected ModuleFS")
+}
+
+func (s *oppositeGraphStore) LockModule(path string) (func(), error) {
+	firstShared := !s.seen && (path == "test/x" || path == "test/y")
+	if firstShared {
+		s.seen = true
+		s.locks.recordAttempt(s.id, path)
+		<-s.locks.attempted
+	}
+
+	lock := s.locks.lock(path)
+	<-lock
+	if firstShared && s.locks.attemptsDiffer() {
+		s.locks.recordAcquired()
+		<-s.locks.bothAcquired
+	}
+	return func() { lock <- struct{}{} }, nil
+}
+
 // ---------------------------------------------------------------------------
 // NewBuilder tests
 // ---------------------------------------------------------------------------
@@ -435,6 +565,121 @@ func TestBuild_EmptyTargets(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("got %d results, want 0", len(results))
+	}
+}
+
+func TestBuild_LocksEntireDependencyGraph(t *testing.T) {
+	depA := mod("a/dep", "1.0.0")
+	depZ := mod("z/dep", "1.0.0")
+	root := mod("m/root", "1.0.0", depZ, depA)
+	paths := []string{"a/dep", "m/root", "z/dep"}
+	store := &graphLockStore{}
+	buildCache := &graphLockCache{store: store, paths: paths}
+	b := &Builder{
+		store:        store,
+		matrix:       "amd64-linux",
+		workspaceDir: t.TempDir(),
+		cache:        buildCache,
+	}
+
+	results, err := b.Build(context.Background(), []*modules.Module{root, depZ, depA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 3 || buildCache.gets != 3 {
+		t.Fatalf("Build returned %d results and %d cache gets, want 3 each", len(results), buildCache.gets)
+	}
+	wantEvents := []string{
+		"lock a/dep", "lock m/root", "lock z/dep",
+		"unlock z/dep", "unlock m/root", "unlock a/dep",
+	}
+	if !slices.Equal(store.events, wantEvents) {
+		t.Fatalf("lock events = %q, want %q", store.events, wantEvents)
+	}
+	if len(store.held) != 0 {
+		t.Fatalf("locks remain held after Build: %v", store.held)
+	}
+}
+
+func TestBuild_ReleasesGraphLocksAfterLockError(t *testing.T) {
+	dep := mod("a/dep", "1.0.0")
+	root := mod("m/root", "1.0.0", dep)
+	wantErr := errors.New("lock failed")
+	store := &graphLockStore{failPath: "m/root", failErr: wantErr}
+	buildCache := &graphLockCache{store: store, paths: []string{"a/dep", "m/root"}}
+	b := &Builder{
+		store:        store,
+		matrix:       "amd64-linux",
+		workspaceDir: t.TempDir(),
+		cache:        buildCache,
+	}
+
+	if _, err := b.Build(context.Background(), []*modules.Module{root, dep}); !errors.Is(err, wantErr) {
+		t.Fatalf("Build error = %v, want %v", err, wantErr)
+	}
+	wantEvents := []string{"lock a/dep", "lock m/root", "unlock a/dep"}
+	if !slices.Equal(store.events, wantEvents) {
+		t.Fatalf("lock events = %q, want %q", store.events, wantEvents)
+	}
+	if len(store.held) != 0 {
+		t.Fatalf("locks remain held after failure: %v", store.held)
+	}
+	if buildCache.gets != 0 {
+		t.Fatalf("cache Get calls = %d, want 0", buildCache.gets)
+	}
+}
+
+func TestBuild_OppositeGraphOrdersDoNotDeadlock(t *testing.T) {
+	x1 := mod("test/x", "1.0.0")
+	y1 := mod("test/y", "1.0.0")
+	x1.Deps = []*modules.Module{y1}
+	root1 := mod("test/root1", "1.0.0", x1)
+
+	x2 := mod("test/x", "1.0.0")
+	y2 := mod("test/y", "1.0.0")
+	y2.Deps = []*modules.Module{x2}
+	root2 := mod("test/root2", "1.0.0", y2)
+
+	locks := newOppositeGraphLocks()
+	newBuilder := func(id int) *Builder {
+		return &Builder{
+			store:        &oppositeGraphStore{id: id, locks: locks},
+			matrix:       "amd64-linux",
+			workspaceDir: t.TempDir(),
+			cache: &recordingCache{hits: map[module.Version]cache.Entry{
+				{Path: "test/x", Version: "1.0.0"}:     {Metadata: "x"},
+				{Path: "test/y", Version: "1.0.0"}:     {Metadata: "y"},
+				{Path: "test/root1", Version: "1.0.0"}: {Metadata: "root1"},
+				{Path: "test/root2", Version: "1.0.0"}: {Metadata: "root2"},
+			}},
+		}
+	}
+	builder1 := newBuilder(0)
+	builder2 := newBuilder(1)
+
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	go func() {
+		<-start
+		_, err := builder1.Build(context.Background(), []*modules.Module{root1, x1, y1})
+		done <- err
+	}()
+	go func() {
+		<-start
+		_, err := builder2.Build(context.Background(), []*modules.Module{root2, y2, x2})
+		done <- err
+	}()
+	close(start)
+
+	for range 2 {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Build deadlocked while acquiring opposite graph orders")
+		}
 	}
 }
 

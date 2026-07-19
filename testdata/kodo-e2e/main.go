@@ -26,6 +26,7 @@ import (
 	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/build"
 	buildcache "github.com/goplus/llar/internal/build/cache"
+	"github.com/goplus/llar/internal/lockedfile"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/mod/module"
 	qiniuclient "github.com/qiniu/go-sdk/v7/client"
@@ -420,21 +421,19 @@ func (s *suite) differentMatrix(ctx context.Context) error {
 func (s *suite) concurrentDuplicate(ctx context.Context) error {
 	matrix := s.cfg.matrix + "-concurrent"
 	key := cacheKey(s.cfg.target, matrix)
-	workspace1 := mustTempDir("llar-kodo-e2e-concurrent-")
-	workspace2 := mustTempDir("llar-kodo-e2e-concurrent-")
-	c1 := s.newCache(workspace1)
-	c2 := s.newCache(workspace2)
+	workspace := mustTempDir("llar-kodo-e2e-concurrent-")
+	c := s.newCache(workspace)
 
 	results := make(chan buildResult, 2)
 	start := make(chan struct{})
 	go func() {
 		<-start
-		got, err := s.build(ctx, s.cfg.target, matrix, workspace1, c1)
+		got, err := s.build(ctx, s.cfg.target, matrix, workspace, c)
 		results <- buildResult{result: got, err: err}
 	}()
 	go func() {
 		<-start
-		got, err := s.build(ctx, s.cfg.target, matrix, workspace2, c2)
+		got, err := s.build(ctx, s.cfg.target, matrix, workspace, c)
 		results <- buildResult{result: got, err: err}
 	}()
 	close(start)
@@ -456,14 +455,17 @@ func (s *suite) concurrentDuplicate(ctx context.Context) error {
 	if first.result.Metadata != second.result.Metadata {
 		return fmt.Errorf("concurrent metadata = %q, want %q", second.result.Metadata, first.result.Metadata)
 	}
+	if first.result.OutputDir != second.result.OutputDir {
+		return fmt.Errorf("concurrent output dirs = %q and %q, want shared output", first.result.OutputDir, second.result.OutputDir)
+	}
 	if err := assertZlibOutput(first.result.OutputDir); err != nil {
 		return err
 	}
 	if err := assertZlibOutput(second.result.OutputDir); err != nil {
 		return err
 	}
-	if total := c1.totalPuts() + c2.totalPuts(); total != 2 {
-		return fmt.Errorf("cache Put calls = %d, want 2", total)
+	if total := c.totalPuts(); total != 1 {
+		return fmt.Errorf("cache Put calls = %d, want 1", total)
 	}
 	if _, err := s.assertStoredArtifact(ctx, key, "-lz"); err != nil {
 		return err
@@ -476,17 +478,14 @@ func (s *suite) concurrentSharedDependency(ctx context.Context) error {
 
 	results := make(chan namedBuildResult, len(s.cfg.sharedTargets))
 	start := make(chan struct{})
-	// Each workspace/cache pair models a separate llard. Sharing an install
-	// directory would turn the expected duplicate Kodo builds into a local file race.
-	caches := make([]*countingCache, len(s.cfg.sharedTargets))
-	for i, target := range s.cfg.sharedTargets {
-		workspace := mustTempDir("llar-kodo-e2e-shared-")
-		caches[i] = s.newCache(workspace)
-		go func(target module.Version, workspace string, c *countingCache) {
+	workspace := mustTempDir("llar-kodo-e2e-shared-")
+	c := s.newCache(workspace)
+	for _, target := range s.cfg.sharedTargets {
+		go func(target module.Version) {
 			<-start
 			got, err := s.build(ctx, target, matrix, workspace, c)
 			results <- namedBuildResult{target: target, result: got, err: err}
-		}(target, workspace, caches[i])
+		}(target)
 	}
 	close(start)
 
@@ -502,16 +501,11 @@ func (s *suite) concurrentSharedDependency(ctx context.Context) error {
 		gotByTarget[targetKey(result.target)] = result.result
 	}
 	zlib := module.Version{Path: "madler/zlib", Version: "v1.3.1"}
-	var totalPuts, zlibPuts int
-	for _, c := range caches {
-		totalPuts += c.totalPuts()
-		zlibPuts += c.putCount(cacheKey(zlib, matrix))
+	if totalPuts := c.totalPuts(); totalPuts != 3 {
+		return fmt.Errorf("cache Put calls = %d, want 3", totalPuts)
 	}
-	if totalPuts != 4 {
-		return fmt.Errorf("cache Put calls = %d, want 4", totalPuts)
-	}
-	if zlibPuts != 2 {
-		return fmt.Errorf("shared dependency Put calls = %d, want 2", zlibPuts)
+	if zlibPuts := c.putCount(cacheKey(zlib, matrix)); zlibPuts != 1 {
+		return fmt.Errorf("shared dependency Put calls = %d, want 1", zlibPuts)
 	}
 	if _, err := s.assertStoredArtifact(ctx, cacheKey(zlib, matrix), "-lz"); err != nil {
 		return err
@@ -616,11 +610,12 @@ func (s *suite) assertStoredArtifact(ctx context.Context, key buildcache.Key, me
 }
 
 type localFormulaStore struct {
-	root string
+	root    string
+	lockDir string
 }
 
 func newLocalFormulaStore(root string) *localFormulaStore {
-	return &localFormulaStore{root: root}
+	return &localFormulaStore{root: root, lockDir: mustTempDir("llar-kodo-e2e-locks-")}
 }
 
 func (s *localFormulaStore) ModuleFS(ctx context.Context, modPath string) (fs.FS, error) {
@@ -632,10 +627,15 @@ func (s *localFormulaStore) ModuleFS(ctx context.Context, modPath string) (fs.FS
 }
 
 func (s *localFormulaStore) LockModule(modPath string) (func(), error) {
-	if modPath == "" {
-		return nil, fmt.Errorf("empty module path")
+	escaped, err := module.EscapePath(modPath)
+	if err != nil {
+		return nil, err
 	}
-	return func() {}, nil
+	lockFile := filepath.Join(s.lockDir, escaped+".lock")
+	if err := os.MkdirAll(filepath.Dir(lockFile), 0o755); err != nil {
+		return nil, err
+	}
+	return lockedfile.MutexAt(lockFile).Lock()
 }
 
 type countingCache struct {
