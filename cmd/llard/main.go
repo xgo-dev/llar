@@ -91,7 +91,7 @@ func run() error {
 	})
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("/", buildHandler)
+	mux.Handle("/v1/artifacts/", buildHandler)
 	server := &http.Server{
 		Addr: cfg.addr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
