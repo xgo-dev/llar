@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	classfile "github.com/goplus/llar/formula"
@@ -232,12 +233,6 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
 		testThisMod := b.runTest && isRoot && mod.OnTest != nil
 
-		unlock, err := b.store.LockModule(mod.Path)
-		if err != nil {
-			return Result{}, err
-		}
-		defer unlock()
-
 		installDir, err := b.installDir(mod.Path, mod.Version)
 		if err != nil {
 			return Result{}, err
@@ -348,6 +343,47 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 	var results []Result
 
+	buildList := b.constructBuildList(targets)
+	lockPaths := make([]string, 0, len(buildList))
+	for _, target := range buildList {
+		lockPaths = append(lockPaths, target.Path)
+	}
+	// A dependent keeps reading its dependencies' install directories after
+	// their own build steps return, so hold the whole graph until Build completes.
+	//
+	// Case 1 - Disjoint graphs:
+	// Request A builds libpng -> zlib and request B builds curl -> openssl.
+	// They lock different module paths and remain parallel.
+	//
+	// Case 2 - Overlapping graphs:
+	// Request A builds libpng -> zlib and request B builds freetype -> zlib.
+	// Because both graphs contain zlib, the later request waits for the earlier
+	// Build to finish, then reuses its published zlib artifact instead of observing
+	// a replaced install tree.
+	//
+	// Lock ordering:
+	// Use a stable order so overlapping graphs cannot deadlock. For example,
+	// X -> Y produces build order [Y, X], while another matrix with Y -> X produces
+	// [X, Y]. Locking in build order can leave each request holding one lock and
+	// waiting for the other; sorting makes both lock [X, Y].
+	sort.Strings(lockPaths)
+	unlocks := make([]func(), 0, len(lockPaths))
+	for _, path := range lockPaths {
+		unlock, err := b.store.LockModule(path)
+		if err != nil {
+			for i := len(unlocks) - 1; i >= 0; i-- {
+				unlocks[i]()
+			}
+			return nil, err
+		}
+		unlocks = append(unlocks, unlock)
+	}
+	defer func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}()
+
 	// Save current environment and restore it after OnBuild,
 	// that's because OnBuild may break environment
 	// TODO(MeteorsLiu): Switch to sandbox to run OnBuild
@@ -361,7 +397,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	}()
 
 	// TODO(MeteorsLiu): Parallel build
-	for _, target := range b.constructBuildList(targets) {
+	for _, target := range buildList {
 		result, err := build(target)
 		if err != nil {
 			return nil, err

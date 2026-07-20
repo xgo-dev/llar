@@ -8,12 +8,14 @@ require (
 	github.com/goplus/mod v0.19.0
 	github.com/goplus/xgo v1.6.1
 	github.com/jessevdk/go-flags v1.6.1
+	github.com/joho/godotenv v1.5.1
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/petermattis/goid v0.0.0-20260713073324-57ed88f34a0a
 	github.com/qiniu/go-sdk/v7 v7.26.14
 	github.com/qiniu/x v1.16.0
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.32.0
+	golang.org/x/sync v0.19.0
 	golang.org/x/sys v0.40.0
 )
 
@@ -43,7 +45,6 @@ require (
 	github.com/visualfc/gid v0.3.0 // indirect
 	github.com/visualfc/goembed v0.3.2 // indirect
 	github.com/visualfc/xtype v0.2.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	modernc.org/fileutil v1.0.0 // indirect

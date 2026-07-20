@@ -1,0 +1,12 @@
+Checking for gcc...
+Building static library libz.a version 1.3.1 with gcc.
+Checking for attribute(visibility) support... Yes.
+-c -o adler32.o
+-c -o gzwrite.o
+libz.a adler32.o crc32.o
+-o example example.o -L. libz.a
+-o minigzip minigzip.o -L. libz.a
+/lib/libz.a
+/share/man/man3/zlib.3
+/lib/pkgconfig/zlib.pc
+/include/zlib.h

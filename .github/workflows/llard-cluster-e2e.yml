@@ -1,0 +1,205 @@
+name: LLARD Cluster E2E
+
+on:
+  push:
+  pull_request_target:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llard-cluster-e2e
+  cancel-in-progress: false
+
+jobs:
+  workers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        id: [1, 2]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+
+      - name: Join private network
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:llar-ci
+          hostname: llar-${{ github.run_id }}-${{ github.run_attempt }}-worker-${{ matrix.id }}
+
+      - name: Build llard
+        run: |
+          go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llard" ./cmd/llard
+          go build -o "$RUNNER_TEMP/llard-e2e-control" ./testdata/llard-e2e/control
+
+      - name: Prepare formula repository
+        run: |
+          formula_repo="$RUNNER_TEMP/llarhub"
+          mkdir -p "$formula_repo"
+          cp -R testdata/kodo-e2e/formulas/. "$formula_repo/"
+          git -C "$formula_repo" init --initial-branch=main
+          git -C "$formula_repo" config user.email llard-e2e@example.com
+          git -C "$formula_repo" config user.name "LLARD E2E"
+          git -C "$formula_repo" add .
+          git -C "$formula_repo" commit -m "LLARD E2E formulas"
+          git config --global protocol.file.allow always
+          git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
+
+      - name: Run llard
+        env:
+          QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+          QINIU_PUBLIC_DOMAIN: ${{ secrets.QINIU_PUBLIC_DOMAIN }}
+          QINIU_PREFIX: ${{ secrets.QINIU_PREFIX }}
+        run: |
+          test -n "$QINIU_ACCESS_KEY"
+          test -n "$QINIU_SECRET_KEY"
+          test -n "$QINIU_BUCKET"
+          test -n "$QINIU_PUBLIC_DOMAIN"
+
+          prefix="${QINIU_PREFIX#/}"
+          prefix="${prefix%/}"
+          if [ -n "$prefix" ]; then
+            prefix="$prefix/"
+          fi
+          prefix="${prefix}llard-cluster-e2e/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          runtime_dir="$RUNNER_TEMP/llard-worker"
+          tracker_dir="$RUNNER_TEMP/llard-bin"
+          build_log="$RUNNER_TEMP/llard-builds"
+          real_git="$(command -v git)"
+          upstream_addr="$(tailscale ip -4 | head -n 1):8080"
+          mkdir -p "$runtime_dir" "$RUNNER_TEMP/llard-cache" "$tracker_dir"
+          : > "$build_log"
+          printf '%s\n' \
+            'LLARD_ADDR=0.0.0.0:8080' \
+            "LLARD_KODO_ACCESS_KEY=$QINIU_ACCESS_KEY" \
+            "LLARD_KODO_SECRET_KEY=$QINIU_SECRET_KEY" \
+            "LLARD_KODO_BUCKET=$QINIU_BUCKET" \
+            "LLARD_KODO_PUBLIC_DOMAIN=$QINIU_PUBLIC_DOMAIN" \
+            "LLARD_KODO_PREFIX=$prefix" \
+            > "$runtime_dir/.env"
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'case "$PWD" in' \
+            '  /tmp/source-*)' \
+            '    if [ "$1" = fetch ]; then' \
+            '      printf "%s\\n" "$PWD" >> "$LLARD_E2E_BUILD_LOG"' \
+            '    fi' \
+            '    ;;' \
+            'esac' \
+            'exec "$LLARD_E2E_REAL_GIT" "$@"' \
+            > "$tracker_dir/git"
+          chmod +x "$tracker_dir/git"
+
+          cd "$runtime_dir"
+          LLARD_E2E_BUILD_LOG="$build_log" \
+            LLARD_E2E_REAL_GIT="$real_git" \
+            PATH="$tracker_dir:$PATH" \
+            XDG_CACHE_HOME="$RUNNER_TEMP/llard-cache" \
+            "$RUNNER_TEMP/llard" &
+          llard_pid=$!
+
+          LLARD_PID="$llard_pid" \
+            LLARD_E2E_BUILD_LOG="$build_log" \
+            LLARD_E2E_UPSTREAM_ADDR="$upstream_addr" \
+            "$RUNNER_TEMP/llard-e2e-control" &
+          control_pid=$!
+
+          cleanup() {
+            kill "$llard_pid" "$control_pid" 2>/dev/null || true
+            wait "$llard_pid" "$control_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          wait -n "$llard_pid" "$control_pid"
+
+  nginx:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      WORKER_1: llar-${{ github.run_id }}-${{ github.run_attempt }}-worker-1
+      WORKER_2: llar-${{ github.run_id }}-${{ github.run_attempt }}-worker-2
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+
+      - name: Join private network
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:llar-ci
+          hostname: llar-${{ github.run_id }}-${{ github.run_attempt }}-nginx
+          ping: llar-${{ github.run_id }}-${{ github.run_attempt }}-worker-1,llar-${{ github.run_id }}-${{ github.run_attempt }}-worker-2
+
+      - name: Wait for llard workers
+        run: |
+          for worker in "$WORKER_1" "$WORKER_2"; do
+            for attempt in $(seq 1 300); do
+              if curl --fail --silent --show-error --connect-timeout 2 "http://$worker:8080/health" > /dev/null; then
+                break
+              fi
+              if [ "$attempt" -eq 300 ]; then
+                echo "$worker did not become ready" >&2
+                exit 1
+              fi
+              sleep 1
+            done
+          done
+
+      - name: Install nginx
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gettext-base nginx
+
+      - name: Start nginx
+        env:
+          NGINX_PID: ${{ runner.temp }}/llard-nginx.pid
+        run: |
+          mkdir -p "$RUNNER_TEMP/nginx"
+          envsubst '${WORKER_1} ${WORKER_2} ${NGINX_PID}' \
+            < testdata/llard-cluster-e2e/nginx.conf \
+            > "$RUNNER_TEMP/nginx.conf"
+          nginx -t -c "$RUNNER_TEMP/nginx.conf" -p "$RUNNER_TEMP/nginx"
+          nginx -c "$RUNNER_TEMP/nginx.conf" -p "$RUNNER_TEMP/nginx"
+
+      - name: Run llard E2E
+        env:
+          QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+          QINIU_PREFIX: ${{ secrets.QINIU_PREFIX }}
+        run: |
+          LLARD_E2E_BASE_URL="http://127.0.0.1:18080" \
+            LLARD_E2E_WORKERS="http://$WORKER_1:8080,http://$WORKER_2:8080" \
+            LLARD_E2E_CONTROLS="http://$WORKER_1:18081,http://$WORKER_2:18081" \
+            go test -v -ldflags="-checklinkname=0" ./testdata/llard-e2e -count=1
+
+      - name: Stop llard workers and nginx
+        if: always()
+        run: |
+          curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "http://$WORKER_1:18081/shutdown" || true
+          curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "http://$WORKER_2:18081/shutdown" || true
+          if [ -f "$RUNNER_TEMP/llard-nginx.pid" ]; then
+            kill "$(<"$RUNNER_TEMP/llard-nginx.pid")" || true
+          fi
