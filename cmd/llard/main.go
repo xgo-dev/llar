@@ -21,6 +21,7 @@ import (
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/joho/godotenv"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type config struct {
@@ -82,17 +83,20 @@ func run() error {
 		WorkspaceDir: workspaceDir,
 		Artifacts:    artifacts,
 	})
-	handler := buildhttp.New(buildhttp.Options{
+	buildHandler := buildhttp.New(buildhttp.Options{
 		FormulaStore: formulaStore,
 		Cache:        buildCache,
 		Artifacts:    artifacts,
 		WorkspaceDir: workspaceDir,
 	})
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/", buildHandler)
 	server := &http.Server{
 		Addr: cfg.addr,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log.Printf("request method=%s uri=%s remote=%s", r.Method, r.URL.RequestURI(), r.RemoteAddr)
-			handler.ServeHTTP(w, r)
+			mux.ServeHTTP(w, r)
 		}),
 	}
 
