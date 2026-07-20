@@ -156,7 +156,7 @@ jobs:
         run: |
           for worker in "$WORKER_1" "$WORKER_2"; do
             for attempt in $(seq 1 300); do
-              if curl --fail --silent --show-error --connect-timeout 2 "http://$worker:8080/health" > /dev/null; then
+              if curl --fail --silent --show-error --connect-timeout 2 "http://$worker:8080/metrics" > /dev/null; then
                 break
               fi
               if [ "$attempt" -eq 300 ]; then
