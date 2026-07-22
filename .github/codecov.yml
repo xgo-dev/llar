@@ -3,5 +3,3 @@ coverage:
     - "internal/ixgo"
     - "cmd/llar/main.go"
     - "cmd/llar/internal/root.go"
-    - "cmd/llar/internal/install.go"
-

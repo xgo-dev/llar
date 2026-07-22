@@ -18,6 +18,25 @@ go install -ldflags="-checklinkname=0" github.com/goplus/llar/cmd/llar@latest
 
 ## Usage
 
+### Install a package
+
+```bash
+# Install zlib and its dependencies
+llar install madler/zlib@v1.3.2
+
+# Show remote build output
+llar install -v madler/zlib@v1.3.2
+
+# Install a selected build matrix
+llar install --os linux --arch amd64 --option shared=ON madler/zlib@v1.3.2
+
+# Print the installed module result as JSON
+llar install --json madler/zlib@v1.3.2
+
+# Install and export the root artifact
+llar install -o zlib.tar.gz madler/zlib@v1.3.2
+```
+
 ### Build a package
 
 ```bash
@@ -49,13 +68,13 @@ llar make ./madler/zlib@v1.3.1
 | `llar make <module@version>` | Build a module from source |
 | `llar test <module@version>` | Verify a module's installed artifacts |
 
-### Flags for `make`
+### Flags for `make` and `install`
 
 | Flag | Description |
 |------|-------------|
 | `-v, --verbose` | Enable verbose build output |
-| `-j, --json` | Print the build result as JSON |
-| `-o, --output <path>` | Output path (directory or `.zip` file) |
+| `-j, --json` | Print the module result as JSON |
+| `-o, --output <path>` | Output archive path (`.zip` or `.tar.gz`) |
 
 ## How It Works
 
