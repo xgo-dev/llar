@@ -55,6 +55,11 @@ type localCache struct {
 	workspaceDir string
 }
 
+// NewLocalCache creates a cache backed by the given workspace.
+func NewLocalCache(workspaceDir string) cache.Cache {
+	return &localCache{workspaceDir: workspaceDir}
+}
+
 // cacheDir returns the module-level directory for cache storage: workspaceDir/<escapedPath>.
 func (b *Builder) cacheDir(modPath string) (string, error) {
 	return (&localCache{workspaceDir: b.workspaceDir}).cacheDir(modPath)
