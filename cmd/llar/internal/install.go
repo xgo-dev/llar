@@ -103,29 +103,22 @@ func installModules(ctx context.Context, progress io.Writer, downloader *artifac
 	matrixStr := matrix.Combinations()[0]
 	var rootResult moduleOutputResult
 
-	modules := []module.Version{root}
-	downloadAndInstall := func(i int) error {
-		downloaded, err := downloader.Download(ctx, modules[i], matrix, progress)
+	downloadAndInstall := func(mod module.Version) ([]module.Version, error) {
+		downloaded, err := downloader.Download(ctx, mod, matrix, progress)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		fileName := downloaded.File.Name()
 		defer os.Remove(fileName)
 
-		if i == 0 {
-			// The root artifact lists the complete MVS build list.
-			modules = append(modules, downloaded.Deps...)
-			rootResult.Module = downloaded.Module
-			rootResult.Deps = downloaded.Deps
-		}
 		escaped, err := module.EscapePath(downloaded.Module.Path)
 		if err != nil {
-			return fmt.Errorf("invalid downloaded module %q: %w", downloaded.Module.Path, err)
+			return nil, fmt.Errorf("invalid downloaded module %q: %w", downloaded.Module.Path, err)
 		}
 		installDir := filepath.Join(workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, downloaded.Module.Version, matrixStr))
 		info, err := installDownloadedArtifact(fileName, installDir)
 		if err != nil {
-			return fmt.Errorf("install artifact %s@%s: %w", downloaded.Module.Path, downloaded.Module.Version, err)
+			return nil, fmt.Errorf("install artifact %s@%s: %w", downloaded.Module.Path, downloaded.Module.Version, err)
 		}
 		_, err = cache.Put(ctx, buildcache.Key{
 			Module: downloaded.Module,
@@ -135,16 +128,26 @@ func installModules(ctx context.Context, progress io.Writer, downloader *artifac
 			Deps:     info.Deps,
 		})
 		if err != nil {
-			return fmt.Errorf("cache artifact %s@%s: %w", downloaded.Module.Path, downloaded.Module.Version, err)
+			return nil, fmt.Errorf("cache artifact %s@%s: %w", downloaded.Module.Path, downloaded.Module.Version, err)
 		}
-		if i == 0 {
-			rootResult.Metadata = info.Metadata
-			rootResult.OutputDir = installDir
+		if mod == root {
+			rootResult = moduleOutputResult{
+				Module:    downloaded.Module,
+				Deps:      downloaded.Deps,
+				Metadata:  info.Metadata,
+				OutputDir: installDir,
+			}
 		}
-		return nil
+		return downloaded.Deps, nil
 	}
-	for i := 0; i < len(modules); i++ {
-		if err := downloadAndInstall(i); err != nil {
+
+	deps, err := downloadAndInstall(root)
+	if err != nil {
+		return moduleOutputResult{}, err
+	}
+	// The root artifact lists the complete MVS build list.
+	for _, mod := range deps {
+		if _, err := downloadAndInstall(mod); err != nil {
 			return moduleOutputResult{}, err
 		}
 	}
