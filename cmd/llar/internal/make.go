@@ -54,8 +54,8 @@ var newRemoteStore = func() (repo.Store, error) {
 
 var makeCmd = &cobra.Command{
 	Use:                "make [module@version]",
-	Short:              "Build a module to FormulaDir",
-	Long:               `Make downloads and builds a module to FormulaDir.`,
+	Short:              "Build a module from source",
+	Long:               `Make resolves a module and its dependencies, then builds the selected matrix from source using LLAR formulas.`,
 	Args:               cobra.ExactArgs(1),
 	FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	RunE:               runMake,

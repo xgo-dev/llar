@@ -45,7 +45,9 @@ llar make ./madler/zlib@v1.3.1
 
 | Command | Description |
 |---------|-------------|
+| `llar install <module@version>` | Install a module from LLAR Cloud |
 | `llar make <module@version>` | Build a module from source |
+| `llar test <module@version>` | Verify a module's installed artifacts |
 
 ### Flags for `make`
 

@@ -13,15 +13,9 @@ import (
 var testVerbose bool
 
 var testCmd = &cobra.Command{
-	Use:   "test [module@version]",
-	Short: "Build a module and run its onTest hook",
-	Long: `Test builds a module the same way as 'llar make', then executes
-the module's onTest callback on the resulting artifacts.
-
-The build cache is consulted as usual: if the module has already been built
-with the same matrix, onBuild is skipped and onTest runs against the cached
-artifacts. On a cache miss, onBuild runs and its result is cached for later
-invocations before onTest executes.`,
+	Use:                "test [module@version]",
+	Short:              "Verify a module's installed artifacts",
+	Long:               `Test builds and installs the selected module matrix, then verifies that the resulting artifacts are usable from a consumer's perspective.`,
 	Args:               cobra.ExactArgs(1),
 	FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
 	RunE:               runTest,
