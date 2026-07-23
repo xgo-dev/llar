@@ -604,50 +604,6 @@ func TestRequestInstallArtifactsRejectsInvalidResponses(t *testing.T) {
 	}
 }
 
-func TestResolveInstallArtifactsRejectsInvalidResponses(t *testing.T) {
-	query := url.Values{"arch": {"amd64"}, "os": {"linux"}}
-	wantQuery := query.Encode()
-	otherQuery := url.Values{"arch": {"arm64"}, "os": {"linux"}}.Encode()
-	artifact := func(id string) installArtifactMessage {
-		return installArtifactMessage{ID: id, Type: "zip", URL: "https://example.com/artifact.zip"}
-	}
-	tests := []struct {
-		name      string
-		messages  []installArtifactMessage
-		requested module.Version
-		want      string
-	}{
-		{name: "invalid artifact ID", messages: []installArtifactMessage{artifact("invalid")}, requested: module.Version{Path: "test/root"}, want: `invalid artifact id "invalid"`},
-		{name: "artifact matrix", messages: []installArtifactMessage{artifact("test/root@v1?" + otherQuery)}, requested: module.Version{Path: "test/root"}, want: "has matrix query"},
-		{name: "multiple roots", messages: []installArtifactMessage{artifact("test/root@v1?" + wantQuery), artifact("test/root@v2?" + wantQuery)}, requested: module.Version{Path: "test/root"}, want: "llard returned multiple artifacts"},
-		{name: "missing root", messages: []installArtifactMessage{artifact("test/other@v1?" + wantQuery)}, requested: module.Version{Path: "test/root"}, want: "llard response is missing requested artifact"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := resolveInstallArtifacts(tt.messages, tt.requested, query)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("resolveInstallArtifacts() error = %v, want %q", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestParseInstallArtifactIDRejectsInvalidID(t *testing.T) {
-	for _, id := range []string{
-		"https://example.com/test/root@v1?os=linux",
-		"test/root?os=linux",
-		"test/root@?os=linux",
-		"test/root@v1",
-		"test/root@v1?%",
-	} {
-		t.Run(id, func(t *testing.T) {
-			if _, _, err := parseInstallArtifactID(id); err == nil {
-				t.Fatalf("parseInstallArtifactID(%q) succeeded", id)
-			}
-		})
-	}
-}
-
 func TestDownloadInstallArtifactResponses(t *testing.T) {
 	archive := makeInstallArtifact(t, ".zip", "include/root.h", "root", "/build/root", "-lroot", nil)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

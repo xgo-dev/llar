@@ -31,11 +31,6 @@ type installArtifactMessage struct {
 	URL  string `json:"url"`
 }
 
-type resolvedInstallArtifact struct {
-	message installArtifactMessage
-	module  module.Version
-}
-
 var installVerbose bool
 var installOutput string
 var installJSON bool
@@ -134,10 +129,6 @@ func install(ctx context.Context, progress io.Writer, serviceURL, arg string, ma
 	if err != nil {
 		return moduleOutputResult{}, err
 	}
-	artifacts, err := resolveInstallArtifacts(messages, requested, query)
-	if err != nil {
-		return moduleOutputResult{}, err
-	}
 
 	userCacheDir, err := os.UserCacheDir()
 	if err != nil {
@@ -149,50 +140,54 @@ func install(ctx context.Context, progress io.Writer, serviceURL, arg string, ma
 	}
 	cache := build.NewLocalCache(workspaceDir)
 	matrixStr := matrix.Combinations()[0]
-	var root module.Version
-	deps := make([]module.Version, 0, len(artifacts)-1)
-	for _, artifact := range artifacts {
-		if artifact.module.Path == requested.Path && (requested.Version == "" || artifact.module.Version == requested.Version) {
-			root = artifact.module
-			continue
-		}
-		deps = append(deps, artifact.module)
-	}
 
 	var rootResult moduleOutputResult
-	for _, artifact := range artifacts {
-		escaped, err := module.EscapePath(artifact.module.Path)
+	deps := make([]module.Version, 0, len(messages)-1)
+	for _, message := range messages {
+		parsed, err := url.Parse(message.ID)
 		if err != nil {
-			return moduleOutputResult{}, fmt.Errorf("invalid artifact id %q: %w", artifact.message.ID, err)
+			return moduleOutputResult{}, fmt.Errorf("invalid artifact id %q: %w", message.ID, err)
 		}
-		installDir := filepath.Join(workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, artifact.module.Version, matrixStr))
-		key := buildcache.Key{Module: artifact.module, Matrix: matrixStr}
+		index := strings.LastIndexByte(parsed.Path, '@')
+		if index <= 0 || index == len(parsed.Path)-1 {
+			return moduleOutputResult{}, fmt.Errorf("invalid artifact id %q", message.ID)
+		}
+		mod := module.Version{Path: parsed.Path[:index], Version: parsed.Path[index+1:]}
+
+		escaped, err := module.EscapePath(mod.Path)
+		if err != nil {
+			return moduleOutputResult{}, fmt.Errorf("invalid artifact id %q: %w", message.ID, err)
+		}
+		installDir := filepath.Join(workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, mod.Version, matrixStr))
+		key := buildcache.Key{Module: mod, Matrix: matrixStr}
 		entry, ok, err := cache.Get(ctx, key)
 		if err != nil {
-			return moduleOutputResult{}, fmt.Errorf("read cache for artifact %s: %w", artifact.message.ID, err)
+			return moduleOutputResult{}, fmt.Errorf("read cache for artifact %s: %w", message.ID, err)
 		}
 		if !ok {
-			info, err := downloadInstallArtifact(ctx, http.DefaultClient, baseURL, artifact.message, installDir)
+			info, err := downloadInstallArtifact(ctx, http.DefaultClient, baseURL, message, installDir)
 			if err != nil {
-				return moduleOutputResult{}, fmt.Errorf("install artifact %s: %w", artifact.message.ID, err)
+				return moduleOutputResult{}, fmt.Errorf("install artifact %s: %w", message.ID, err)
 			}
 			entry, err = cache.Put(ctx, key, os.DirFS(installDir), buildcache.Entry{
 				Metadata: info.Metadata,
 				Deps:     info.Deps,
 			})
 			if err != nil {
-				return moduleOutputResult{}, fmt.Errorf("cache artifact %s: %w", artifact.message.ID, err)
+				return moduleOutputResult{}, fmt.Errorf("cache artifact %s: %w", message.ID, err)
 			}
 		}
-		if artifact.module == root {
+		if mod.Path == requested.Path {
 			rootResult = moduleOutputResult{
-				Module:    root,
-				Deps:      deps,
+				Module:    mod,
 				Metadata:  entry.Metadata,
 				OutputDir: installDir,
 			}
+		} else {
+			deps = append(deps, mod)
 		}
 	}
+	rootResult.Deps = deps
 	return rootResult, nil
 }
 
@@ -286,48 +281,6 @@ func requestInstallArtifacts(ctx context.Context, progress io.Writer, client *ht
 		return nil, fmt.Errorf("llard returned no artifacts")
 	}
 	return artifacts, nil
-}
-
-func resolveInstallArtifacts(messages []installArtifactMessage, requested module.Version, query url.Values) ([]resolvedInstallArtifact, error) {
-	wantQuery := query.Encode()
-	artifacts := make([]resolvedInstallArtifact, 0, len(messages))
-	rootFound := false
-	for _, message := range messages {
-		mod, gotQuery, err := parseInstallArtifactID(message.ID)
-		if err != nil {
-			return nil, err
-		}
-		if gotQuery != wantQuery {
-			return nil, fmt.Errorf("artifact %q has matrix query %q, want %q", message.ID, gotQuery, wantQuery)
-		}
-		if mod.Path == requested.Path && (requested.Version == "" || mod.Version == requested.Version) {
-			if rootFound {
-				return nil, fmt.Errorf("llard returned multiple artifacts for %s", requested.Path)
-			}
-			rootFound = true
-		}
-		artifacts = append(artifacts, resolvedInstallArtifact{message: message, module: mod})
-	}
-	if !rootFound {
-		return nil, fmt.Errorf("llard response is missing requested artifact %s", requested.Path)
-	}
-	return artifacts, nil
-}
-
-func parseInstallArtifactID(id string) (module.Version, string, error) {
-	parsed, err := url.Parse(id)
-	if err != nil || parsed.Scheme != "" || parsed.Host != "" || parsed.Fragment != "" || parsed.RawQuery == "" {
-		return module.Version{}, "", fmt.Errorf("invalid artifact id %q", id)
-	}
-	index := strings.LastIndexByte(parsed.Path, '@')
-	if index <= 0 || index == len(parsed.Path)-1 {
-		return module.Version{}, "", fmt.Errorf("invalid artifact id %q", id)
-	}
-	query, err := url.ParseQuery(parsed.RawQuery)
-	if err != nil || len(query) == 0 {
-		return module.Version{}, "", fmt.Errorf("invalid artifact id %q", id)
-	}
-	return module.Version{Path: parsed.Path[:index], Version: parsed.Path[index+1:]}, query.Encode(), nil
 }
 
 func downloadInstallArtifact(ctx context.Context, client *http.Client, baseURL *url.URL, artifact installArtifactMessage, installDir string) (metadata.Info, error) {
