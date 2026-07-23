@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/internal/artifact"
+	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact/archiver"
 	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/mod/module"
@@ -270,26 +271,22 @@ func TestInstallDownloadsRootAndDependencies(t *testing.T) {
 	depArchive := makeInstallArtifact(t, ".zip", "lib/libdep.a", "dep", "/build/dep", "-L/build/dep/lib -ldep", nil)
 	rootArchive := makeInstallArtifact(t, ".tar.gz", "include/root.h", "root", "/build/root", "-I/build/root/include -lroot", []module.Version{{Path: "test/dep", Version: "v1.2.3"}})
 
-	var rootDownloads, depDownloads int
+	var artifactRequests, rootDownloads, depDownloads int
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/artifacts/test/root":
+			artifactRequests++
 			if got := r.URL.Query().Encode(); got != query {
 				t.Errorf("matrix query = %q, want %q", got, query)
 			}
 			w.Header().Set("Content-Type", "application/x-cmdjsonl")
 			writeInstallCommand(t, w, "info", "resolving test/root")
 			writeInstallCommand(t, w, "artifact", map[string]any{
-				"id": rootID, "type": "tar.gz", "url": server.URL + "/downloads/root.tar.gz", "deps": []string{depID},
-			})
-		case "/v1/artifacts/test/dep@v1.2.3":
-			if got := r.URL.Query().Encode(); got != query {
-				t.Errorf("matrix query = %q, want %q", got, query)
-			}
-			w.Header().Set("Content-Type", "application/x-cmdjsonl")
-			writeInstallCommand(t, w, "artifact", map[string]any{
 				"id": depID, "type": "zip", "url": server.URL + "/downloads/dep.zip",
+			})
+			writeInstallCommand(t, w, "artifact", map[string]any{
+				"id": rootID, "type": "tar.gz", "url": server.URL + "/downloads/root.tar.gz", "deps": []string{depID},
 			})
 		case "/downloads/dep.zip":
 			depDownloads++
@@ -322,6 +319,9 @@ func TestInstallDownloadsRootAndDependencies(t *testing.T) {
 	}
 	if rootDownloads != 1 || depDownloads != 1 {
 		t.Fatalf("downloads = root:%d dep:%d, want one each", rootDownloads, depDownloads)
+	}
+	if artifactRequests != 1 {
+		t.Fatalf("llard artifact requests = %d, want one", artifactRequests)
 	}
 
 	depDir := filepath.Join(workspaceDir, fmt.Sprintf("test/dep@v1.2.3-%s", matrixStr))
@@ -358,6 +358,90 @@ func TestInstallDownloadsRootAndDependencies(t *testing.T) {
 		t.Fatalf("JSON result = %+v", jsonResult)
 	}
 
+}
+
+func TestInstallSkipsCachedArtifacts(t *testing.T) {
+	workspaceDir := isolatedWorkspaceDir(t)
+	matrix := hostMatrix()
+	matrix.Options = map[string][]string{"shared": {"ON"}}
+	matrixStr := matrix.Combinations()[0]
+	query := url.Values{
+		"arch":   {runtime.GOARCH},
+		"os":     {runtime.GOOS},
+		"shared": {"ON"},
+	}.Encode()
+
+	depDir := filepath.Join(workspaceDir, fmt.Sprintf("test/dep@v1.2.3-%s", matrixStr))
+	depMetadata := "-L" + filepath.Join(depDir, "lib") + " -ldep"
+	prepopulateCache(t, workspaceDir, "test/dep", "v1.2.3", matrixStr, depMetadata)
+	depSentinel := filepath.Join(depDir, "cached.txt")
+	if err := os.WriteFile(depSentinel, []byte("cached dependency"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	rootArchive := makeInstallArtifact(t, ".zip", "include/root.h", "root", "/build/root", "-I/build/root/include -lroot", nil)
+	depArchive := makeInstallArtifact(t, ".zip", "lib/libdep.a", "downloaded dep", "/build/dep", "-ldep", nil)
+	rootID := "test/root@v1.0.0?" + query
+	depID := "test/dep@v1.2.3?" + query
+	var manifestRequests, rootDownloads, depDownloads int
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/artifacts/test/root":
+			manifestRequests++
+			w.Header().Set("Content-Type", "application/x-cmdjsonl")
+			writeInstallCommand(t, w, "artifact", map[string]any{
+				"id": depID, "type": "zip", "url": server.URL + "/dep.zip",
+			})
+			writeInstallCommand(t, w, "artifact", map[string]any{
+				"id": rootID, "type": "zip", "url": server.URL + "/root.zip",
+			})
+		case "/dep.zip":
+			depDownloads++
+			_, _ = w.Write(depArchive)
+		case "/root.zip":
+			rootDownloads++
+			_, _ = w.Write(rootArchive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	result, err := install(context.Background(), nil, server.URL, "test/root", matrix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifestRequests != 1 || rootDownloads != 1 || depDownloads != 0 {
+		t.Fatalf("requests = manifest:%d root:%d dep:%d, want 1, 1, 0", manifestRequests, rootDownloads, depDownloads)
+	}
+	assertInstallFile(t, depSentinel, "cached dependency")
+	if result.Module != (module.Version{Path: "test/root", Version: "v1.0.0"}) {
+		t.Fatalf("result module = %+v", result.Module)
+	}
+	if len(result.Deps) != 1 || result.Deps[0] != (module.Version{Path: "test/dep", Version: "v1.2.3"}) {
+		t.Fatalf("result deps = %+v", result.Deps)
+	}
+	if result.Metadata != "-I"+filepath.Join(result.OutputDir, "include")+" -lroot" {
+		t.Fatalf("result metadata = %q", result.Metadata)
+	}
+
+	rootHeader := filepath.Join(result.OutputDir, "include", "root.h")
+	if err := os.WriteFile(rootHeader, []byte("cached root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err = install(context.Background(), nil, server.URL, "test/root", matrix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifestRequests != 2 || rootDownloads != 1 || depDownloads != 0 {
+		t.Fatalf("requests after cache hit = manifest:%d root:%d dep:%d, want 2, 1, 0", manifestRequests, rootDownloads, depDownloads)
+	}
+	assertInstallFile(t, rootHeader, "cached root")
+	assertInstallFile(t, depSentinel, "cached dependency")
+	if result.Metadata != "-I"+filepath.Join(result.OutputDir, "include")+" -lroot" {
+		t.Fatalf("cached result metadata = %q", result.Metadata)
+	}
 }
 
 func TestInstallOutputFlags(t *testing.T) {
@@ -409,7 +493,7 @@ func TestInstallRejectsInvalidInputAndEnvironment(t *testing.T) {
 	})
 	t.Run("service URL", func(t *testing.T) {
 		_, err := install(context.Background(), nil, "not a URL", "test/root", hostMatrix())
-		if err == nil || !strings.Contains(err.Error(), "invalid artifact base URL") {
+		if err == nil || !strings.Contains(err.Error(), "invalid llard service URL") {
 			t.Fatalf("install() error = %v, want service URL error", err)
 		}
 	})
@@ -435,6 +519,32 @@ func TestInstallRejectsInvalidInputAndEnvironment(t *testing.T) {
 	})
 }
 
+func TestInstallRejectsInvalidMatrix(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	tests := []struct {
+		name   string
+		matrix formula.Matrix
+		want   string
+	}{
+		{name: "empty", want: "build matrix is required"},
+		{name: "empty key", matrix: formula.Matrix{Require: map[string][]string{"": {"linux"}}}, want: "matrix key is required"},
+		{name: "no values", matrix: formula.Matrix{Require: map[string][]string{"os": nil}}, want: `matrix "os" requires exactly one value`},
+		{name: "multiple values", matrix: formula.Matrix{Require: map[string][]string{"os": {"linux", "darwin"}}}, want: `matrix "os" requires exactly one value`},
+		{name: "empty value", matrix: formula.Matrix{Require: map[string][]string{"os": {""}}}, want: `matrix "os" requires exactly one value`},
+		{name: "duplicate", matrix: formula.Matrix{Require: map[string][]string{"os": {"linux"}}, Options: map[string][]string{"os": {"darwin"}}}, want: `matrix "os" is duplicated`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := install(context.Background(), nil, server.URL, "test/root", tt.matrix)
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("install() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestInstallReturnsLlardError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-cmdjsonl")
@@ -446,6 +556,158 @@ func TestInstallReturnsLlardError(t *testing.T) {
 	_, err := install(context.Background(), nil, server.URL, "test/missing@v1.0.0", hostMatrix())
 	if err == nil || err.Error() != "llard: module not found" {
 		t.Fatalf("install() error = %v, want llard error", err)
+	}
+}
+
+func TestRequestInstallArtifactsRejectsInvalidResponses(t *testing.T) {
+	tests := []struct {
+		name        string
+		status      int
+		contentType string
+		body        string
+		want        string
+	}{
+		{name: "status", status: http.StatusServiceUnavailable, contentType: "application/x-cmdjsonl", want: "llard returned 503 Service Unavailable"},
+		{name: "content type", contentType: "text/plain", body: "artifact {}\n", want: `llard returned content type "text/plain", want application/x-cmdjsonl`},
+		{name: "line", contentType: "application/x-cmdjsonl", body: "invalid\n", want: "invalid llard response line 1"},
+		{name: "info JSON", contentType: "application/x-cmdjsonl", body: "info {\n", want: "decode llard info line 1"},
+		{name: "error JSON", contentType: "application/x-cmdjsonl", body: "error {\n", want: "decode llard error line 1"},
+		{name: "artifact JSON", contentType: "application/x-cmdjsonl", body: "artifact {\n", want: "decode llard artifact line 1"},
+		{name: "artifact fields", contentType: "application/x-cmdjsonl", body: "artifact {\"id\":\"test/root@v1?os=linux\"}\n", want: "invalid llard artifact line 1"},
+		{name: "command", contentType: "application/x-cmdjsonl", body: "done {}\n", want: `unsupported llard response command "done"`},
+		{name: "no artifacts", contentType: "application/x-cmdjsonl", body: "info \"checking\"\n", want: "llard returned no artifacts"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tt.contentType != "" {
+					w.Header().Set("Content-Type", tt.contentType)
+				}
+				if tt.status != 0 {
+					w.WriteHeader(tt.status)
+				}
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+			baseURL, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = requestInstallArtifacts(
+				context.Background(), nil, server.Client(), baseURL,
+				module.Version{Path: "test/root"}, url.Values{"os": {"linux"}},
+			)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("requestInstallArtifacts() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveInstallArtifactsRejectsInvalidResponses(t *testing.T) {
+	query := url.Values{"arch": {"amd64"}, "os": {"linux"}}
+	wantQuery := query.Encode()
+	otherQuery := url.Values{"arch": {"arm64"}, "os": {"linux"}}.Encode()
+	artifact := func(id string) installArtifactMessage {
+		return installArtifactMessage{ID: id, Type: "zip", URL: "https://example.com/artifact.zip"}
+	}
+	tests := []struct {
+		name      string
+		messages  []installArtifactMessage
+		requested module.Version
+		want      string
+	}{
+		{name: "invalid artifact ID", messages: []installArtifactMessage{artifact("invalid")}, requested: module.Version{Path: "test/root"}, want: `invalid artifact id "invalid"`},
+		{name: "artifact matrix", messages: []installArtifactMessage{artifact("test/root@v1?" + otherQuery)}, requested: module.Version{Path: "test/root"}, want: "has matrix query"},
+		{name: "multiple roots", messages: []installArtifactMessage{artifact("test/root@v1?" + wantQuery), artifact("test/root@v2?" + wantQuery)}, requested: module.Version{Path: "test/root"}, want: "llard returned multiple artifacts"},
+		{name: "missing root", messages: []installArtifactMessage{artifact("test/other@v1?" + wantQuery)}, requested: module.Version{Path: "test/root"}, want: "llard response is missing requested artifact"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := resolveInstallArtifacts(tt.messages, tt.requested, query)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("resolveInstallArtifacts() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseInstallArtifactIDRejectsInvalidID(t *testing.T) {
+	for _, id := range []string{
+		"https://example.com/test/root@v1?os=linux",
+		"test/root?os=linux",
+		"test/root@?os=linux",
+		"test/root@v1",
+		"test/root@v1?%",
+	} {
+		t.Run(id, func(t *testing.T) {
+			if _, _, err := parseInstallArtifactID(id); err == nil {
+				t.Fatalf("parseInstallArtifactID(%q) succeeded", id)
+			}
+		})
+	}
+}
+
+func TestDownloadInstallArtifactResponses(t *testing.T) {
+	archive := makeInstallArtifact(t, ".zip", "include/root.h", "root", "/build/root", "-lroot", nil)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/artifact.zip":
+			_, _ = w.Write(archive)
+		case "/unavailable.zip":
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	baseURL, err := url.Parse(server.URL + "/base/")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	installDir := filepath.Join(t.TempDir(), "install")
+	info, err := downloadInstallArtifact(context.Background(), server.Client(), baseURL, installArtifactMessage{Type: "zip", URL: "/artifact.zip"}, installDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Metadata != "-lroot" {
+		t.Fatalf("metadata = %q", info.Metadata)
+	}
+	assertInstallFile(t, filepath.Join(installDir, "include", "root.h"), "root")
+
+	tests := []struct {
+		name     string
+		artifact installArtifactMessage
+		ctx      func() context.Context
+		want     string
+	}{
+		{name: "type", artifact: installArtifactMessage{Type: "tar.zst", URL: "/artifact"}, want: `unsupported artifact type "tar.zst"`},
+		{name: "URL parse", artifact: installArtifactMessage{Type: "zip", URL: "%"}, want: "invalid URL escape"},
+		{name: "URL scheme", artifact: installArtifactMessage{Type: "zip", URL: "file:///tmp/artifact.zip"}, want: "invalid artifact URL"},
+		{name: "status", artifact: installArtifactMessage{Type: "zip", URL: "/unavailable.zip"}, want: "download returned 503 Service Unavailable"},
+		{name: "canceled", artifact: installArtifactMessage{Type: "zip", URL: "/artifact.zip"}, ctx: func() context.Context {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx
+		}, want: "context canceled"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tt.ctx != nil {
+				ctx = tt.ctx()
+			}
+			_, err := downloadInstallArtifact(ctx, server.Client(), baseURL, tt.artifact, filepath.Join(t.TempDir(), "install"))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("downloadInstallArtifact() error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+	if _, err := downloadInstallArtifact(context.Background(), server.Client(), baseURL, installArtifactMessage{Type: "zip", URL: "/artifact.zip"}, filepath.Join(t.TempDir(), "install")); err == nil {
+		t.Fatal("downloadInstallArtifact() succeeded with an unavailable temporary directory")
 	}
 }
 
@@ -463,8 +725,13 @@ func TestInstallRemovesDownloadedArtifactOnError(t *testing.T) {
 			writeInstallCommand(t, w, "artifact", map[string]any{
 				"id": "test/root@v1.0.0?" + query, "type": "zip", "url": server.URL + "/root.zip",
 			})
+			writeInstallCommand(t, w, "artifact", map[string]any{
+				"id": "test/dep@v1.0.0?" + query, "type": "zip", "url": server.URL + "/dep.zip",
+			})
 		case "/root.zip":
 			_, _ = w.Write([]byte("not a zip archive"))
+		case "/dep.zip":
+			_, _ = w.Write([]byte("unprocessed dependency"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -484,33 +751,29 @@ func TestInstallRemovesDownloadedArtifactOnError(t *testing.T) {
 	}
 }
 
-func TestInstallModulesReturnsInvalidModulePath(t *testing.T) {
+func TestInstallReturnsInvalidModulePath(t *testing.T) {
+	isolatedWorkspaceDir(t)
 	matrix := hostMatrix()
 	query := url.Values{"arch": {runtime.GOARCH}, "os": {runtime.GOOS}}.Encode()
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/artifact.zip" {
-			_, _ = w.Write([]byte("artifact"))
-			return
-		}
 		w.Header().Set("Content-Type", "application/x-cmdjsonl")
 		writeInstallCommand(t, w, "artifact", map[string]any{
 			"id": "../bad@v1.0.0?" + query, "type": "zip", "url": server.URL + "/artifact.zip",
 		})
+		writeInstallCommand(t, w, "artifact", map[string]any{
+			"id": "test/root@v1.0.0?" + query, "type": "zip", "url": server.URL + "/artifact.zip",
+		})
 	}))
 	defer server.Close()
 
-	downloader, err := artifact.NewDownloader(artifact.DownloaderOptions{BaseURL: server.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = installModules(context.Background(), nil, downloader, t.TempDir(), module.Version{Path: "../bad"}, matrix)
-	if err == nil || !strings.Contains(err.Error(), "invalid downloaded module") {
-		t.Fatalf("installModules() error = %v, want invalid module error", err)
+	_, err := install(context.Background(), nil, server.URL, "test/root", matrix)
+	if err == nil || !strings.Contains(err.Error(), "invalid artifact id") {
+		t.Fatalf("install() error = %v, want invalid module error", err)
 	}
 }
 
-func TestInstallModulesReturnsCacheError(t *testing.T) {
+func TestInstallReturnsCacheError(t *testing.T) {
 	matrix := hostMatrix()
 	query := url.Values{"arch": {runtime.GOARCH}, "os": {runtime.GOOS}}.Encode()
 	rootArchive := makeInstallArtifact(t, ".zip", "include/root.h", "root", "/build/root", "-lroot", nil)
@@ -530,20 +793,16 @@ func TestInstallModulesReturnsCacheError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	downloader, err := artifact.NewDownloader(artifact.DownloaderOptions{BaseURL: server.URL})
-	if err != nil {
-		t.Fatal(err)
-	}
-	workspaceDir := t.TempDir()
+	workspaceDir := isolatedWorkspaceDir(t)
 	if err := os.MkdirAll(filepath.Join(workspaceDir, "test"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(workspaceDir, "test", "root"), []byte("not a directory"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err = installModules(context.Background(), nil, downloader, workspaceDir, module.Version{Path: "test/root"}, matrix)
+	_, err := install(context.Background(), nil, server.URL, "test/root", matrix)
 	if err == nil || !strings.Contains(err.Error(), "cache artifact test/root@v1.0.0") {
-		t.Fatalf("installModules() error = %v, want cache error", err)
+		t.Fatalf("install() error = %v, want cache error", err)
 	}
 }
 
