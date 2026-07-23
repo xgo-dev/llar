@@ -33,7 +33,10 @@ llar install --os linux --arch amd64 --option shared=ON madler/zlib@v1.3.2
 # Print the installed module result as JSON
 llar install --json madler/zlib@v1.3.2
 
-# Install and export the root artifact
+# Install and copy the root artifact into a directory
+llar install -o ./zlib-out madler/zlib@v1.3.2
+
+# Install and export the root artifact as an archive
 llar install -o zlib.tar.gz madler/zlib@v1.3.2
 ```
 
@@ -74,7 +77,7 @@ llar make ./madler/zlib@v1.3.1
 |------|-------------|
 | `-v, --verbose` | Enable verbose build output |
 | `-j, --json` | Print the module result as JSON |
-| `-o, --output <path>` | Output archive path (`.zip` or `.tar.gz`) |
+| `-o, --output <path>` | Output path (directory, `.zip`, or `.tar.gz`) |
 
 ## How It Works
 

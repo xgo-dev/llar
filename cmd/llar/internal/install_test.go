@@ -157,14 +157,16 @@ func TestInstallCommand(t *testing.T) {
 	installDir := filepath.Join(workspaceDir, "test/root@v1.0.0-testarch-testos|ON")
 	assertInstallFile(t, filepath.Join(installDir, "include", "root.h"), "root")
 
+	directoryOutput := filepath.Join(t.TempDir(), "root-out")
 	_, _, err = runInstallCmd(t,
-		"--output", filepath.Join(t.TempDir(), "root.invalid"),
+		"--output", directoryOutput,
 		"--os", "testos", "--arch", "testarch", "--option", "shared=ON",
 		"test/root",
 	)
-	if err == nil || !strings.Contains(err.Error(), "unsupported artifact output") {
-		t.Fatalf("llar install error = %v, want unsupported output error", err)
+	if err != nil {
+		t.Fatalf("llar install -o directory failed: %v", err)
 	}
+	assertInstallFile(t, filepath.Join(directoryOutput, "include", "root.h"), "root")
 }
 
 func TestInstallCommandReturnsLlardError(t *testing.T) {
@@ -180,6 +182,32 @@ func TestInstallCommandReturnsLlardError(t *testing.T) {
 	if err == nil || err.Error() != "llard: module not found" {
 		t.Fatalf("llar install error = %v, want llard error", err)
 	}
+}
+
+func TestWriteModuleOutputPrefersExistingDirectory(t *testing.T) {
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, "include"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "include", "root.h"), []byte("root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := filepath.Join(t.TempDir(), "root.zip")
+	if err := os.Mkdir(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeModuleOutput(moduleOutputResult{OutputDir: source}, dest); err != nil {
+		t.Fatalf("writeModuleOutput() error = %v", err)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("output %q is not a directory", dest)
+	}
+	assertInstallFile(t, filepath.Join(dest, "include", "root.h"), "root")
 }
 
 func TestRunInstallReturnsMatrixError(t *testing.T) {

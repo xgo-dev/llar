@@ -34,7 +34,7 @@ var installCmd = &cobra.Command{
 
 func init() {
 	installCmd.Flags().BoolVarP(&installVerbose, "verbose", "v", false, "Enable verbose build output")
-	installCmd.Flags().StringVarP(&installOutput, "output", "o", "", "Output archive path (.zip file or .tar.gz file)")
+	installCmd.Flags().StringVarP(&installOutput, "output", "o", "", "Output path (directory, .zip file, or .tar.gz file)")
 	installCmd.Flags().BoolVarP(&installJSON, "json", "j", false, "Print module result as JSON")
 	rootCmd.AddCommand(installCmd)
 }
@@ -63,16 +63,10 @@ func runInstall(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if installOutput != "" {
-		// TODO: Let clients request the artifact compression format from llard.
-		//
-		// Current behavior:
-		//   - --output repacks the installed root. For example, .zip selects ZIP
-		//     and .tar.gz selects tar+gzip, regardless of the remote artifact type.
-		body, err := metadata.Encode(metadata.Info{Metadata: result.Metadata, Deps: result.Deps}, result.OutputDir)
-		if err != nil {
-			return fmt.Errorf("failed to write output: %w", err)
-		}
-		if err := archiver.Pack(result.OutputDir, installOutput, body); err != nil {
+		// TODO: Let install clients request the remote artifact compression format.
+		// Until then, .zip and .tar.gz outputs repackage the installed root while
+		// directory outputs, for example "-o ./zlib-out", copy its files directly.
+		if err := writeModuleOutput(result, installOutput); err != nil {
 			return fmt.Errorf("failed to write output: %w", err)
 		}
 	}

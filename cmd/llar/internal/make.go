@@ -11,10 +11,8 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/artifact/archiver"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/formula/repo"
-	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/modules/modlocal"
 	"github.com/goplus/llar/internal/vcs"
@@ -50,7 +48,7 @@ var makeCmd = &cobra.Command{
 
 func init() {
 	makeCmd.Flags().BoolVarP(&makeVerbose, "verbose", "v", false, "Enable verbose build output")
-	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output archive path (.zip file or .tar.gz file)")
+	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output path (directory, .zip file, or .tar.gz file)")
 	makeCmd.Flags().BoolVarP(&makeJSON, "json", "j", false, "Print module result as JSON")
 	rootCmd.AddCommand(makeCmd)
 }
@@ -183,11 +181,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 			return err
 		}
 		if makeOutput != "" {
-			body, err := metadata.Encode(metadata.Info{Metadata: result.Metadata, Deps: result.Deps}, result.OutputDir)
-			if err != nil {
-				return fmt.Errorf("failed to write output: %w", err)
-			}
-			if err := archiver.Pack(result.OutputDir, makeOutput, body); err != nil {
+			if err := writeModuleOutput(result, makeOutput); err != nil {
 				return fmt.Errorf("failed to write output: %w", err)
 			}
 		}
