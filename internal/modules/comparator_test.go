@@ -3,6 +3,7 @@ package modules
 import (
 	"io/fs"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -146,6 +147,24 @@ func TestLoadComparator_Fake(t *testing.T) {
 	}
 	if cmp(module.Version{"a", "v1"}, module.Version{"b", "v1"}) != -1 {
 		t.Error("unexpected result")
+	}
+}
+
+func TestLoadComparator_OutsideModule(t *testing.T) {
+	formulaDir, err := filepath.Abs("testdata/DaveGamble/cJSON")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Formula repositories do not contain go.mod. For example, llarhub stores
+	// CJSON_cmp.gox beside versions.json, so loading it must not invoke go list.
+	t.Chdir(t.TempDir())
+	comp, err := loadComparatorFS(os.DirFS(formulaDir).(fs.ReadFileFS), "CJSON_cmp.gox")
+	if err != nil {
+		t.Fatalf("loadComparatorFS outside a module: %v", err)
+	}
+	if got := comp(module.Version{Version: "v1.0.0"}, module.Version{Version: "v2.0.0"}); got >= 0 {
+		t.Fatalf("comparison = %d, want a negative value", got)
 	}
 }
 
