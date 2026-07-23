@@ -26,6 +26,7 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+          allow-unsafe-pr-checkout: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
