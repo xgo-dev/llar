@@ -2,7 +2,6 @@ package internal
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	stdbuild "go/build"
 	"io"
@@ -12,10 +11,8 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/artifact/archiver"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/formula/repo"
-	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/modules/modlocal"
 	"github.com/goplus/llar/internal/vcs"
@@ -26,18 +23,6 @@ import (
 var makeVerbose bool
 var makeOutput string
 var makeJSON bool
-
-type makeJSONDep struct {
-	Path    string `json:"path"`
-	Version string `json:"version"`
-}
-
-type makeJSONResult struct {
-	Path     string        `json:"path"`
-	Version  string        `json:"version"`
-	Deps     []makeJSONDep `json:"deps,omitempty"`
-	Metadata string        `json:"metadata"`
-}
 
 // newRemoteStore creates the remote formula store. Overridable for testing.
 var newRemoteStore = func() (repo.Store, error) {
@@ -63,8 +48,8 @@ var makeCmd = &cobra.Command{
 
 func init() {
 	makeCmd.Flags().BoolVarP(&makeVerbose, "verbose", "v", false, "Enable verbose build output")
-	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output archive path (.zip file or .tar.gz file)")
-	makeCmd.Flags().BoolVarP(&makeJSON, "json", "j", false, "Print build result as JSON")
+	makeCmd.Flags().StringVarP(&makeOutput, "output", "o", "", "Output path (directory, .zip file, or .tar.gz file)")
+	makeCmd.Flags().BoolVarP(&makeJSON, "json", "j", false, "Print module result as JSON")
 	rootCmd.AddCommand(makeCmd)
 }
 
@@ -76,13 +61,11 @@ func runMake(cmd *cobra.Command, args []string) error {
 
 	ctx := context.Background()
 
-	// Resolve output path to absolute before build (build may change cwd)
 	if makeOutput != "" {
-		abs, err := filepath.Abs(makeOutput)
+		makeOutput, err = filepath.Abs(makeOutput)
 		if err != nil {
 			return fmt.Errorf("failed to resolve output path: %w", err)
 		}
-		makeOutput = abs
 	}
 
 	matrix, err := resolveMatrix(cmd)
@@ -154,7 +137,10 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		return fmt.Errorf("failed to load modules: %w", err)
 	}
 
-	buildOutput := buildOutputWriter()
+	var buildOutput io.Writer = io.Discard
+	if makeVerbose {
+		buildOutput = os.Stderr
+	}
 
 	matrixStr := matrix.Combinations()[0]
 	buildOpts := build.Options{
@@ -185,39 +171,23 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 
 	if len(results) > 0 {
 		main := results[len(results)-1]
-		if makeJSON {
-			deps := artifactDeps(mods)
-			jsonDeps := make([]makeJSONDep, 0, len(deps))
-			for _, dep := range deps {
-				jsonDeps = append(jsonDeps, makeJSONDep{Path: dep.Path, Version: dep.Version})
-			}
-			out := makeJSONResult{
-				Path:     mods[0].Path,
-				Version:  mods[0].Version,
-				Deps:     jsonDeps,
-				Metadata: main.Metadata,
-			}
-			if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
-				return err
-			}
-		} else if main.Metadata != "" {
-			fmt.Println(main.Metadata)
+		result := moduleOutputResult{
+			Module:    module.Version{Path: mods[0].Path, Version: mods[0].Version},
+			Deps:      artifactDeps(mods),
+			Metadata:  main.Metadata,
+			OutputDir: main.OutputDir,
+		}
+		if err := writeModuleResult(os.Stdout, result, makeJSON); err != nil {
+			return err
 		}
 		if makeOutput != "" {
-			if err := outputArtifact(main.OutputDir, makeOutput, main.Metadata, artifactDeps(mods)); err != nil {
+			if err := writeModuleOutput(result, makeOutput); err != nil {
 				return fmt.Errorf("failed to write output: %w", err)
 			}
 		}
 	}
 
 	return nil
-}
-
-func buildOutputWriter() io.Writer {
-	if makeVerbose {
-		return os.Stderr
-	}
-	return io.Discard
 }
 
 // parseModuleArg parses a module argument and detects local filesystem patterns.
@@ -260,12 +230,4 @@ func artifactDeps(mods []*modules.Module) []module.Version {
 		deps = append(deps, module.Version{Path: mod.Path, Version: mod.Version})
 	}
 	return deps
-}
-
-func outputArtifact(srcDir, dest, value string, deps []module.Version) error {
-	body, err := metadata.Encode(metadata.Info{Metadata: value, Deps: deps}, srcDir)
-	if err != nil {
-		return err
-	}
-	return archiver.Pack(srcDir, dest, body)
 }

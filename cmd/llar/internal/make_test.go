@@ -1,10 +1,8 @@
 package internal
 
 import (
-	"archive/tar"
 	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,7 +20,6 @@ import (
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
-	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/mod/module"
 )
@@ -170,14 +167,15 @@ func TestRunMakeReturnsMatrixErrorBeforeStore(t *testing.T) {
 	}
 }
 
-func setupTestSrcDir(t *testing.T) string {
-	t.Helper()
-	src := t.TempDir()
-	os.MkdirAll(filepath.Join(src, "lib"), 0755)
-	os.WriteFile(filepath.Join(src, "lib", "libfoo.a"), []byte("archive"), 0644)
-	os.MkdirAll(filepath.Join(src, "include"), 0755)
-	os.WriteFile(filepath.Join(src, "include", "foo.h"), []byte("#pragma once"), 0644)
-	return src
+func TestNewRemoteStore(t *testing.T) {
+	isolatedWorkspaceDir(t)
+	store, err := newRemoteStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store == nil {
+		t.Fatal("newRemoteStore() returned nil")
+	}
 }
 
 func TestArtifactDepsSkipsMainModule(t *testing.T) {
@@ -204,128 +202,6 @@ func TestArtifactDepsStandalone(t *testing.T) {
 	}
 	if got := artifactDeps([]*modules.Module{{Path: "owner/main", Version: "v1.0.0"}}); got != nil {
 		t.Fatalf("artifactDeps(single) = %+v, want nil", got)
-	}
-}
-
-func TestOutputArtifactRejectsNonArchiveOutput(t *testing.T) {
-	src := setupTestSrcDir(t)
-	dest := filepath.Join(t.TempDir(), "out")
-
-	err := outputArtifact(src, dest, "-lfoo", nil)
-	if err == nil {
-		t.Fatal("outputArtifact error = nil, want unsupported archive error")
-	}
-	if !strings.Contains(err.Error(), "unsupported artifact output") {
-		t.Fatalf("outputArtifact error = %v, want unsupported artifact output", err)
-	}
-}
-
-func TestOutputArtifactZipsMetadataDirectory(t *testing.T) {
-	src := setupTestSrcDir(t)
-	dest := filepath.Join(t.TempDir(), "out.zip")
-	deps := []module.Version{{Path: "madler/zlib", Version: "v1.3.1"}}
-	value := "-L" + filepath.Join(src, "lib") + " -lz"
-
-	if err := outputArtifact(src, dest, value, deps); err != nil {
-		t.Fatalf("outputArtifact: %v", err)
-	}
-
-	r, err := zip.OpenReader(dest)
-	if err != nil {
-		t.Fatalf("open zip: %v", err)
-	}
-	defer r.Close()
-
-	for _, f := range r.File {
-		if f.Name != ".llar/metadata.json" {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			t.Fatalf("open metadata entry: %v", err)
-		}
-		defer rc.Close()
-		data, err := io.ReadAll(rc)
-		if err != nil {
-			t.Fatalf("read metadata entry: %v", err)
-		}
-		got, err := metadata.Decode(data, src)
-		if err != nil {
-			t.Fatalf("decode metadata: %v", err)
-		}
-		if got.Metadata != value {
-			t.Fatalf("metadata = %q, want %q", got.Metadata, value)
-		}
-		if !reflect.DeepEqual(got.Deps, deps) {
-			t.Fatalf("deps = %+v, want %+v", got.Deps, deps)
-		}
-		return
-	}
-	t.Fatal("zip missing .llar/metadata.json")
-}
-
-func TestOutputArtifactTarGzMetadataDirectory(t *testing.T) {
-	src := setupTestSrcDir(t)
-	dest := filepath.Join(t.TempDir(), "out.tar.gz")
-
-	if err := outputArtifact(src, dest, "-lfoo", nil); err != nil {
-		t.Fatalf("outputArtifact: %v", err)
-	}
-
-	files := readTarGz(t, dest)
-	got, err := metadata.Decode(files[".llar/metadata.json"], src)
-	if err != nil {
-		t.Fatalf("decode metadata: %v", err)
-	}
-	if got.Metadata != "-lfoo" {
-		t.Fatalf("metadata = %q, want %q", got.Metadata, "-lfoo")
-	}
-	if len(got.Deps) != 0 {
-		t.Fatalf("deps = %+v, want none", got.Deps)
-	}
-}
-
-func TestOutputArtifactReturnsPackError(t *testing.T) {
-	src := filepath.Join(t.TempDir(), "missing")
-	dest := filepath.Join(t.TempDir(), "out.zip")
-
-	if err := outputArtifact(src, dest, "-lbad", nil); err == nil {
-		t.Fatal("outputArtifact error = nil, want pack error")
-	}
-}
-
-func readTarGz(t *testing.T, path string) map[string][]byte {
-	t.Helper()
-	file, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open tar.gz: %v", err)
-	}
-	defer file.Close()
-
-	gz, err := gzip.NewReader(file)
-	if err != nil {
-		t.Fatalf("gzip.NewReader: %v", err)
-	}
-	defer gz.Close()
-
-	tr := tar.NewReader(gz)
-	files := map[string][]byte{}
-	for {
-		header, err := tr.Next()
-		if err == io.EOF {
-			return files
-		}
-		if err != nil {
-			t.Fatalf("tar.Next: %v", err)
-		}
-		if header.FileInfo().IsDir() {
-			continue
-		}
-		data, err := io.ReadAll(tr)
-		if err != nil {
-			t.Fatalf("read %s: %v", header.Name, err)
-		}
-		files[header.Name] = data
 	}
 }
 
@@ -842,8 +718,8 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	stdout, stderr, restore := captureProcessStreams(t)
 	var out formula.BuildResult
 	err = execbroker.Do(execbroker.Scope{
-		Stdout: buildOutputWriter(),
-		Stderr: buildOutputWriter(),
+		Stdout: os.Stderr,
+		Stderr: os.Stderr,
 	}, func() error {
 		mods[0].OnBuild(nil, nil, &out)
 		return nil
