@@ -16,6 +16,8 @@
 - Do not hand-roll `os.Args` normalization or custom command parsing when Cobra/pflag already supports the command shape.
 - Single-dash flags are shorthands in pflag. Add a shorthand with `BoolVarP`, `StringVarP`, etc. when short syntax is needed; use `--flag` for long flags.
 - Keep command flags command-local unless the behavior is genuinely global.
+- Write Cobra `Short`/`Long` text and README command summaries in terms of stable, user-facing product responsibilities. Do not define a command by implementation details such as internal services, callback names, cache steps, or internal directories.
+- Keep the core command boundaries explicit. For example, `install` obtains and installs builds from LLAR Cloud, `make` builds from source using LLAR formulas, and `test` verifies installed artifacts from a consumer's perspective.
 
 ### Command Tests
 
