@@ -569,12 +569,12 @@ func TestRequestInstallArtifactsRejectsInvalidResponses(t *testing.T) {
 	}{
 		{name: "status", status: http.StatusServiceUnavailable, contentType: "application/x-cmdjsonl", want: "llard returned 503 Service Unavailable"},
 		{name: "content type", contentType: "text/plain", body: "artifact {}\n", want: `llard returned content type "text/plain", want application/x-cmdjsonl`},
-		{name: "line", contentType: "application/x-cmdjsonl", body: "invalid\n", want: "invalid llard response line 1"},
-		{name: "info JSON", contentType: "application/x-cmdjsonl", body: "info {\n", want: "decode llard info line 1"},
-		{name: "error JSON", contentType: "application/x-cmdjsonl", body: "error {\n", want: "decode llard error line 1"},
-		{name: "artifact JSON", contentType: "application/x-cmdjsonl", body: "artifact {\n", want: "decode llard artifact line 1"},
-		{name: "artifact fields", contentType: "application/x-cmdjsonl", body: "artifact {\"id\":\"test/root@v1?os=linux\"}\n", want: "invalid llard artifact line 1"},
-		{name: "command", contentType: "application/x-cmdjsonl", body: "done {}\n", want: `unsupported llard response command "done"`},
+		{name: "line", contentType: "application/x-cmdjsonl", body: "invalid\n", want: "1: parse error when ParseCommand: no space found"},
+		{name: "info JSON", contentType: "application/x-cmdjsonl", body: "info {\n", want: "1: parse error when UnmarshalParam: unexpected end of JSON input"},
+		{name: "error JSON", contentType: "application/x-cmdjsonl", body: "error {\n", want: "1: parse error when UnmarshalParam: unexpected end of JSON input"},
+		{name: "artifact JSON", contentType: "application/x-cmdjsonl", body: "artifact {\n", want: "1: parse error when UnmarshalParam: unexpected end of JSON input"},
+		{name: "artifact fields", contentType: "application/x-cmdjsonl", body: "artifact {\"id\":\"test/root@v1?os=linux\"}\n", want: "1: parse error when CallHandler artifact: invalid llard artifact"},
+		{name: "command", contentType: "application/x-cmdjsonl", body: "done {}\n", want: "1: parse error when ParseCommand: unknown command 'done'"},
 		{name: "no artifacts", contentType: "application/x-cmdjsonl", body: "info \"checking\"\n", want: "llard returned no artifacts"},
 	}
 	for _, tt := range tests {

@@ -3,8 +3,6 @@ package internal
 import (
 	"bufio"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -20,6 +18,7 @@ import (
 	buildcache "github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/mod/module"
+	"github.com/qiniu/x/cmdjsonl"
 	"github.com/spf13/cobra"
 )
 
@@ -222,60 +221,33 @@ func requestInstallArtifacts(ctx context.Context, progress io.Writer, client *ht
 	}
 
 	var artifacts []installArtifactMessage
-	// TODO: Upgrade ixgo and replace this parser with github.com/qiniu/x/cmdjsonl.
-	//
-	// Dependency constraint:
-	//   - ixgo v0.61.0 ships generated bindings for qiniu/x packages such as
-	//     gsh, osx, stringutil, and xgo/ng.
-	//   - Its stringutil binding references Builder, NewBuilder, and
-	//     NewBuilderSize.
-	//   - cmdjsonl first appears in qiniu/x v1.17.1, which removed those
-	//     stringutil APIs, so upgrading qiniu/x alone breaks the build.
-	//
-	// Migration:
-	//   - Upgrade ixgo to bindings compatible with qiniu/x v1.17.1 or newer.
-	//   - Replace this temporary parser with cmdjsonl.Parser.
-	reader := bufio.NewReader(resp.Body)
-	for lineNo := 1; ; lineNo++ {
-		line, readErr := reader.ReadString('\n')
-		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-		if line != "" {
-			command, data, ok := strings.Cut(line, " ")
-			if !ok {
-				return nil, fmt.Errorf("invalid llard response line %d", lineNo)
-			}
-			switch command {
-			case "info":
-				var message string
-				if err := json.Unmarshal([]byte(data), &message); err != nil {
-					return nil, fmt.Errorf("decode llard info line %d: %w", lineNo, err)
-				}
-				fmt.Fprintln(progress, message)
-			case "error":
-				var message string
-				if err := json.Unmarshal([]byte(data), &message); err != nil {
-					return nil, fmt.Errorf("decode llard error line %d: %w", lineNo, err)
-				}
-				return nil, fmt.Errorf("llard: %s", message)
-			case "artifact":
-				var artifact installArtifactMessage
-				if err := json.Unmarshal([]byte(data), &artifact); err != nil {
-					return nil, fmt.Errorf("decode llard artifact line %d: %w", lineNo, err)
-				}
-				if artifact.ID == "" || artifact.Type == "" || artifact.URL == "" {
-					return nil, fmt.Errorf("invalid llard artifact line %d", lineNo)
-				}
-				artifacts = append(artifacts, artifact)
-			default:
-				return nil, fmt.Errorf("unsupported llard response command %q", command)
-			}
+	var responseErr error
+	var parser cmdjsonl.Parser
+	if err := parser.HandleFunc("info", func(message string) {
+		fmt.Fprintln(progress, message)
+	}); err != nil {
+		return nil, err
+	}
+	if err := parser.HandleFunc("error", func(message string) error {
+		responseErr = fmt.Errorf("llard: %s", message)
+		return responseErr
+	}); err != nil {
+		return nil, err
+	}
+	if err := parser.HandleFunc("artifact", func(artifact installArtifactMessage) error {
+		if artifact.ID == "" || artifact.Type == "" || artifact.URL == "" {
+			return fmt.Errorf("invalid llard artifact")
 		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			return nil, readErr
+		artifacts = append(artifacts, artifact)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := parser.Parse(resp.Body, bufio.MaxScanTokenSize); err != nil {
+		if responseErr != nil {
+			return nil, responseErr
 		}
+		return nil, err
 	}
 	if len(artifacts) == 0 {
 		return nil, fmt.Errorf("llard returned no artifacts")
