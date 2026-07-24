@@ -5,6 +5,7 @@
 package ixgo
 
 //go:generate qexp -outdir pkg github.com/goplus/llar/formula
+//go:generate qexp -outdir pkg github.com/goplus/llar/cmp
 //go:generate qexp -outdir pkg github.com/goplus/llar/mod/versions
 //go:generate qexp -outdir pkg golang.org/x/mod/semver
 //go:generate qexp -outdir pkg github.com/goplus/llar/x/gnu
@@ -178,6 +179,7 @@ import (
 	// _ "github.com/goplus/ixgo/pkg/testing/iotest"
 	// _ "github.com/goplus/ixgo/pkg/testing/quick"
 	// _ "github.com/goplus/ixgo/pkg/testing/slogtest"
+	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/cmp"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/formula"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/mod/module"
 	_ "github.com/goplus/llar/internal/ixgo/pkg/github.com/goplus/llar/mod/versions"
