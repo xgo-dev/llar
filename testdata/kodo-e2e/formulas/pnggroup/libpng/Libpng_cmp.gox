@@ -1,0 +1,5 @@
+compareVer (a, b) => {
+	// Prefer released versions over libpng's non-semver beta tags. For example,
+	// v1.6.58 is valid semver while v1.7.0beta89 is not.
+	return semver.compare(a.Version, b.Version)
+}
