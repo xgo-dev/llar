@@ -67,10 +67,10 @@ func (a *AutoTools) Use(root string) {
 // Configure runs the configure script from sourceDir in the build directory.
 // --prefix is prepended automatically when installDir is set.
 // Extra flags are appended after --prefix.
-func (a *AutoTools) Configure(args ...string) error {
+func (a *AutoTools) Configure(args ...string) {
 	dir := a.workDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+		panic(err)
 	}
 	exe := filepath.Join(a.sourceDir, "configure")
 	if dir == "." {
@@ -80,17 +80,17 @@ func (a *AutoTools) Configure(args ...string) error {
 	if a.installDir != "" {
 		flags = append(flags, "--prefix="+a.installDir)
 	}
-	return a.run(exe, append(flags, args...))
+	a.run(exe, append(flags, args...))
 }
 
 // Build runs "make" with optional extra arguments.
-func (a *AutoTools) Build(args ...string) error {
-	return a.run("make", args)
+func (a *AutoTools) Build(args ...string) {
+	a.run("make", args)
 }
 
 // Install runs "make install" with optional extra arguments appended.
-func (a *AutoTools) Install(args ...string) error {
-	return a.run("make", append([]string{"install"}, args...))
+func (a *AutoTools) Install(args ...string) {
+	a.run("make", append([]string{"install"}, args...))
 }
 
 // OutputDir returns installDir if set, otherwise buildDir.
@@ -108,7 +108,7 @@ func (a *AutoTools) workDir() string {
 	return a.buildDir
 }
 
-func (a *AutoTools) run(name string, args []string) error {
+func (a *AutoTools) run(name string, args []string) {
 	cmd := execbroker.Command(name, args...)
 	cmd.Dir = a.workDir()
 	if cmd.Stdout == nil {
@@ -117,7 +117,10 @@ func (a *AutoTools) run(name string, args []string) error {
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
-	return cmd.Run()
+	err := cmd.Run()
+	if err != nil {
+		panic(err)
+	}
 }
 
 // prependPath prepends value to a PATH-style env var.
