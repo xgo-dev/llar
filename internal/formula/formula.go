@@ -36,8 +36,8 @@ type Formula struct {
 	ModPath   string
 	FromVer   string
 	OnRequire func(proj *formula.Project, deps *formula.ModuleDeps)
-	OnBuild   func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult)
-	OnTest    func(ctx *formula.Context, proj *formula.Project, out *formula.TestResult)
+	OnBuild   func(ctx *formula.Context)
+	OnTest    func(ctx *formula.Context)
 	Filter    func() bool
 }
 
@@ -154,8 +154,8 @@ func loadFS(fs fs.ReadFileFS, path string) (*Formula, error) {
 		program:    program,
 		ModPath:    valueOf(class, "modPath").(string),
 		FromVer:    valueOf(class, "modFromVer").(string),
-		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
-		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
+		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context)),
+		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 		Filter:     valueOf(class, "fFilter").(func() bool),
 	}
@@ -178,8 +178,8 @@ func Clone(f *Formula) *Formula {
 		program:    f.program,
 		ModPath:    valueOf(class, "modPath").(string),
 		FromVer:    valueOf(class, "modFromVer").(string),
-		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context, *formula.Project, *formula.BuildResult)),
-		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context, *formula.Project, *formula.TestResult)),
+		OnBuild:    valueOf(class, "fOnBuild").(func(*formula.Context)),
+		OnTest:     valueOf(class, "fOnTest").(func(*formula.Context)),
 		OnRequire:  valueOf(class, "fOnRequire").(func(*formula.Project, *formula.ModuleDeps)),
 		Filter:     valueOf(class, "fFilter").(func() bool),
 	}
@@ -201,14 +201,14 @@ func Clone(f *Formula) *Formula {
 func (f *Formula) keepProgramAlive() {
 	program := f.program
 	if fn := f.OnBuild; fn != nil {
-		f.OnBuild = func(ctx *formula.Context, proj *formula.Project, out *formula.BuildResult) {
-			fn(ctx, proj, out)
+		f.OnBuild = func(ctx *formula.Context) {
+			fn(ctx)
 			runtime.KeepAlive(program)
 		}
 	}
 	if fn := f.OnTest; fn != nil {
-		f.OnTest = func(ctx *formula.Context, proj *formula.Project, out *formula.TestResult) {
-			fn(ctx, proj, out)
+		f.OnTest = func(ctx *formula.Context) {
+			fn(ctx)
 			runtime.KeepAlive(program)
 		}
 	}

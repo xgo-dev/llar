@@ -716,12 +716,12 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	t.Cleanup(func() { makeVerbose = savedVerbose })
 
 	stdout, stderr, restore := captureProcessStreams(t)
-	var out formula.BuildResult
+	buildCtx := formula.NewContext(nil, "", "", "", nil)
 	err = execbroker.Do(execbroker.Scope{
 		Stdout: os.Stderr,
 		Stderr: os.Stderr,
 	}, func() error {
-		mods[0].OnBuild(nil, nil, &out)
+		mods[0].OnBuild(buildCtx)
 		return nil
 	})
 	restore()
@@ -729,8 +729,8 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if out.Metadata() != "-lA" {
-		t.Fatalf("metadata = %q, want %q", out.Metadata(), "-lA")
+	if buildCtx.Out.Metadata() != "-lA" {
+		t.Fatalf("metadata = %q, want %q", buildCtx.Out.Metadata(), "-lA")
 	}
 	if got := strings.TrimSpace(stdout.String()); got != "" {
 		t.Fatalf("stdout = %q, want no build output", got)

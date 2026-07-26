@@ -28,18 +28,8 @@ func TestModuleDeps_Require(t *testing.T) {
 	}
 }
 
-func TestBuildResult_ErrsAndMetadata(t *testing.T) {
+func TestBuildResult_Metadata(t *testing.T) {
 	result := &BuildResult{}
-	errA := errors.New("first")
-	errB := errors.New("second")
-
-	result.AddErr(errA)
-	result.AddErr(errB)
-
-	if got := result.Errs(); len(got) != 2 || got[0] != errA || got[1] != errB {
-		t.Fatalf("BuildResult.Errs() = %#v, want [%v %v]", got, errA, errB)
-	}
-
 	if result.Metadata() != "" {
 		t.Fatalf("BuildResult.Metadata() = %q, want empty string", result.Metadata())
 	}
@@ -84,7 +74,7 @@ func TestContext_DoesNotExposeCurrentMatrix(t *testing.T) {
 func TestNewContext(t *testing.T) {
 	getOutputDir := func(_ string, _ module.Version) (string, error) { return "", nil }
 
-	ctx := NewContext("/src", "/install", "amd64-linux", getOutputDir)
+	ctx := NewContext(nil, "/src", "/install", "amd64-linux", getOutputDir)
 
 	if ctx.SourceDir != "/src" {
 		t.Errorf("SourceDir = %q, want %q", ctx.SourceDir, "/src")
@@ -114,25 +104,19 @@ func TestContext_OutputDir(t *testing.T) {
 		return "/out/" + m.Path, nil
 	}
 
-	ctx := NewContext("/src", "/install", "amd64-linux", getOutputDir)
+	ctx := NewContext(nil, "/src", "/install", "amd64-linux", getOutputDir)
 
 	t.Run("OutputDir__0 returns own installDir", func(t *testing.T) {
-		got, err := ctx.OutputDir__0()
-		if err != nil {
-			t.Fatalf("OutputDir__0() error = %v", err)
-		}
+		got := ctx.OutputDir__0()
 		if got != "/install" {
-			t.Errorf("OutputDir__0() = %q, want %q", got, "/install")
+			t.Errorf("OutputDir() = %q, want %q", got, "/install")
 		}
 	})
 
 	t.Run("OutputDir__1 dispatches through getOutputDir", func(t *testing.T) {
-		got, err := ctx.OutputDir__1(dep)
-		if err != nil {
-			t.Fatalf("OutputDir__1() error = %v", err)
-		}
+		got := ctx.OutputDir__1(dep)
 		if got != "/out/owner/dep" {
-			t.Errorf("OutputDir__1() = %q, want %q", got, "/out/owner/dep")
+			t.Errorf("OutputDir() = %q, want %q", got, "/out/owner/dep")
 		}
 		if gotMatrix != "amd64-linux" {
 			t.Errorf("getOutputDir matrix = %q, want %q", gotMatrix, "amd64-linux")
@@ -141,6 +125,20 @@ func TestContext_OutputDir(t *testing.T) {
 			t.Errorf("getOutputDir mod = %+v, want %+v", gotMod, dep)
 		}
 	})
+}
+
+func TestContext_ErrOutputDir(t *testing.T) {
+	getOutputDir := func(matrixStr string, m module.Version) (string, error) {
+		return "", errors.New("failed to get output dir")
+	}
+
+	ctx := NewContext(nil, "/src", "/install", "amd64-linux", getOutputDir)
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("OutputDir did not panic on error")
+		}
+	}()
+	ctx.OutputDir__1(module.Version{Path: "owner/dep", Version: "1.0.0"})
 }
 
 func TestContext_BuildResult(t *testing.T) {

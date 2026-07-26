@@ -24,8 +24,8 @@ type ModuleF struct {
 	gsh.App
 
 	fOnRequire func(proj *Project, deps *ModuleDeps)
-	fOnBuild   func(ctx *Context, proj *Project, out *BuildResult)
-	fOnTest    func(ctx *Context, proj *Project, out *TestResult)
+	fOnBuild   func(ctx *Context)
+	fOnTest    func(ctx *Context)
 	fFilter    func() bool
 
 	modPath    string
@@ -214,58 +214,28 @@ func (p *ModuleF) OnRequire(f func(proj *Project, deps *ModuleDeps)) {
 
 // BuildResult represents the result of building a project.
 type BuildResult struct {
-	errs     []error
-	metadata string // build output metadata, for C/C++ it's the result of pkg-config.
-}
-
-// AddErr records a build error.
-func (b *BuildResult) AddErr(err error) {
-	b.errs = append(b.errs, err)
-}
-
-// Errs returns all errors collected during build.
-func (b *BuildResult) Errs() []error {
-	return b.errs
+	meta string // build output metadata, for C/C++ it's the result of pkg-config.
 }
 
 // Metadata returns the build output metadata.
 func (b *BuildResult) Metadata() string {
-	return b.metadata
+	return b.meta
 }
 
 // SetMetadata sets the build output metadata.
 func (b *BuildResult) SetMetadata(metadata string) {
-	b.metadata = metadata
+	b.meta = metadata
 }
 
 // OnBuild event is used to instruct the Formula to compile a project.
-func (p *ModuleF) OnBuild(f func(ctx *Context, proj *Project, out *BuildResult)) {
+func (p *ModuleF) OnBuild(f func(ctx *Context)) {
 	p.fOnBuild = f
-}
-
-// TestResult represents the outcome of a formula's onTest hook.
-// Unlike BuildResult it has no metadata field: a test's job is to verify
-// the build, not to emit additional pkg-config-style flags. Future
-// extensions (pass/fail counts, skip markers, captured logs) should be
-// added here without polluting BuildResult.
-type TestResult struct {
-	errs []error
-}
-
-// AddErr records a test failure.
-func (t *TestResult) AddErr(err error) {
-	t.errs = append(t.errs, err)
-}
-
-// Errs returns all errors collected during the test hook.
-func (t *TestResult) Errs() []error {
-	return t.errs
 }
 
 // OnTest event is used to run post-build verification for a project.
 // It fires after OnBuild has completed successfully, reusing the same build
 // context so tests can locate built artifacts via ctx.OutputDir.
-func (p *ModuleF) OnTest(f func(ctx *Context, proj *Project, out *TestResult)) {
+func (p *ModuleF) OnTest(f func(ctx *Context)) {
 	p.fOnTest = f
 }
 

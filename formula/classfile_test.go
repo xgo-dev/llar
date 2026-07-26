@@ -24,8 +24,8 @@ func (f *testFormula) MainEntry() {
 	f.Defaults(map[string]string{"debug": "OFF"})
 	f.Filter(func() bool { return true })
 	f.OnRequire(func(*Project, *ModuleDeps) {})
-	f.OnBuild(func(*Context, *Project, *BuildResult) {})
-	f.OnTest(func(*Context, *Project, *TestResult) {})
+	f.OnBuild(func(*Context) {})
+	f.OnTest(func(*Context) {})
 }
 
 // TestGopt_ModuleF_Main exercises the classfile entry point together with

@@ -282,14 +282,13 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		getOutputDir := func(_ string, m module.Version) (string, error) {
 			return b.installDir(m.Path, m.Version)
 		}
-		buildContext := classfile.NewContext(tmpSourceDir, installDir, b.matrix, getOutputDir)
+		project := &classfile.Project{Deps: deps, SourceFS: mod.FS.(fs.ReadFileFS)}
+		buildContext := classfile.NewContext(project, tmpSourceDir, installDir, b.matrix, getOutputDir)
 
 		// Inject results of already-built dependencies
 		for modVer, result := range builtResults {
 			buildContext.AddBuildResult(modVer, result)
 		}
-
-		project := &classfile.Project{Deps: deps, SourceFS: mod.FS.(fs.ReadFileFS)}
 
 		var metadata string
 		if err := execbroker.Do(execbroker.Scope{
@@ -302,22 +301,20 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 			if cacheHit {
 				metadata = entry.Metadata
 			} else {
-				var out classfile.BuildResult
-				mod.OnBuild(buildContext, project, &out)
-				if len(out.Errs()) > 0 {
-					return errors.Join(out.Errs()...)
+				mod.OnBuild(buildContext)
+				if len(buildContext.Errs) > 0 {
+					return errors.Join(buildContext.Errs...)
 				}
-				metadata = out.Metadata()
+				metadata = buildContext.Out.Metadata()
 			}
 
 			// Run OnTest (root only) against the just-built or cached
 			// artifacts, reusing the same build context so tests see a
 			// consistent environment either way.
 			if testThisMod {
-				var testOut classfile.TestResult
-				mod.OnTest(buildContext, project, &testOut)
-				if len(testOut.Errs()) > 0 {
-					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, errors.Join(testOut.Errs()...))
+				mod.OnTest(buildContext)
+				if len(buildContext.Errs) > 0 {
+					return fmt.Errorf("onTest failed for %s@%s: %w", mod.Path, mod.Version, buildContext.Errs)
 				}
 			}
 			return nil

@@ -8,6 +8,7 @@ import (
 	"io/fs"
 
 	"github.com/goplus/llar/mod/module"
+	"github.com/qiniu/x/errors"
 )
 
 // -----------------------------------------------------------------------------
@@ -25,7 +26,10 @@ func (p *Project) ReadFile(path string) ([]byte, error) {
 
 // Context represents the build context.
 type Context struct {
+	Proj      *Project
 	SourceDir string
+	Out       BuildResult
+	Errs      errors.List
 
 	buildResults map[module.Version]BuildResult
 
@@ -35,9 +39,9 @@ type Context struct {
 	getOutputDir func(matrixStr string, mod module.Version) (string, error)
 }
 
-// NewContext creates a Context with build-internal fields.
-func NewContext(sourceDir, installDir, matrixStr string, getOutputDir func(string, module.Version) (string, error)) *Context {
+func NewContext(proj *Project, sourceDir, installDir, matrixStr string, getOutputDir func(string, module.Version) (string, error)) *Context {
 	return &Context{
+		Proj:         proj,
 		SourceDir:    sourceDir,
 		installDir:   installDir,
 		matrixStr:    matrixStr,
@@ -45,16 +49,26 @@ func NewContext(sourceDir, installDir, matrixStr string, getOutputDir func(strin
 	}
 }
 
+// SetMetadata sets the build output metadata.
+func (c *Context) SetMetadata(metadata string) {
+	c.Out.SetMetadata(metadata)
+}
+
 // OutputDir__0 returns the current module's output (install) directory.
 // In DSL: ctx.outputDir()
-func (c *Context) OutputDir__0() (string, error) {
-	return c.installDir, nil
+func (c *Context) OutputDir__0() string {
+	return c.installDir
 }
 
 // OutputDir__1 returns the output (install) directory for the given dependency.
 // In DSL: ctx.outputDir(dep)
-func (c *Context) OutputDir__1(mod module.Version) (string, error) {
-	return c.getOutputDir(c.matrixStr, mod)
+func (c *Context) OutputDir__1(mod module.Version) string {
+	dir, err := c.getOutputDir(c.matrixStr, mod)
+	if err != nil {
+		c.Errs.Add(err)
+		panic(err)
+	}
+	return dir
 }
 
 // BuildResult returns the stored build result for the module, if any.

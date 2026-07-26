@@ -2,30 +2,13 @@ id "madler/zlib"
 
 fromVer "1.0.0"
 
-onBuild (ctx, proj, out) => {
-	installDir, err := ctx.outputDir()
-	if err != nil {
-		out.addErr err
-		return
-	}
+onBuild ctx => {
+	installDir := ctx.outputDir
 
 	a := autotools.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	a.configure "--static"
+	a.build
+	a.install
 
-	err = a.configure("--static")
-	if err != nil {
-		out.addErr err
-		return
-	}
-	err = a.build()
-	if err != nil {
-		out.addErr err
-		return
-	}
-	err = a.install()
-	if err != nil {
-		out.addErr err
-		return
-	}
-
-	out.setMetadata "-lz"
+	ctx.setMetadata "-lz"
 }

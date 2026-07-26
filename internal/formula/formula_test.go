@@ -44,8 +44,8 @@ func TestLoadFS(t *testing.T) {
 
 		// Functional test: verify callbacks can be invoked without panic
 		f.OnRequire(&formulapkg.Project{}, &formulapkg.ModuleDeps{})
-		f.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
-		f.OnTest(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.TestResult{})
+		f.OnBuild(&formulapkg.Context{})
+		f.OnTest(&formulapkg.Context{})
 	})
 
 	t.Run("NonExistentFile", func(t *testing.T) {
@@ -92,7 +92,7 @@ func TestLoadFS_TargetSurface(t *testing.T) {
 	if len(gotDeps) != 1 || gotDeps[0].Path != "madler/zlib" || gotDeps[0].Version != "v1.3.1" {
 		t.Fatalf("deps = %+v, want [madler/zlib@v1.3.1]", gotDeps)
 	}
-	f.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+	f.OnBuild(&formulapkg.Context{})
 }
 
 func TestClone(t *testing.T) {
@@ -142,7 +142,7 @@ func TestFormulaProgramCleanup(t *testing.T) {
 	llarixgo.UnlockInterp()
 
 	var loaded int
-	var onBuild func(*formulapkg.Context, *formulapkg.Project, *formulapkg.BuildResult)
+	var onBuild func(*formulapkg.Context)
 	func() {
 		fsys := os.DirFS("testdata/formula").(fs.ReadFileFS)
 		f, err := LoadFS(fsys, "targetsurface_llar.gox")
@@ -169,7 +169,7 @@ func TestFormulaProgramCleanup(t *testing.T) {
 	if withHook <= before {
 		t.Fatal("formula program was released while OnBuild remained reachable")
 	}
-	onBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+	onBuild(&formulapkg.Context{})
 	onBuild = nil
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -195,7 +195,7 @@ func TestFormulaPrintUsesBrokerScope(t *testing.T) {
 
 	var stdout bytes.Buffer
 	err = execbroker.Do(execbroker.Scope{Stdout: &stdout}, func() error {
-		f.OnBuild(&formulapkg.Context{}, &formulapkg.Project{}, &formulapkg.BuildResult{})
+		f.OnBuild(&formulapkg.Context{})
 		return nil
 	})
 	if err != nil {
