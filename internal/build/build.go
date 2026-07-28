@@ -10,11 +10,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	classfile "github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/metrics"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
@@ -239,13 +241,21 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		}
 		deps := b.resolveModTransitiveDeps(targets, mod)
 		modVer := module.Version{Path: mod.Path, Version: mod.Version}
+		cacheTarget := fmt.Sprintf("%s@%s?matrix=%s", mod.Path, mod.Version, b.matrix)
 
 		// Consult the build cache. A hit means we already have the
 		// module's build metadata and its installDir is populated from a
 		// previous successful build.
 		entry, cacheHit, err := b.cache.Get(ctx, cache.Key{Module: modVer, Matrix: b.matrix})
 		if err != nil {
+			metrics.BuildCacheLookups.WithLabelValues(cacheTarget, "error").Inc()
+			metrics.BuildFailures.WithLabelValues("cache_get").Inc()
 			return Result{}, err
+		}
+		if cacheHit {
+			metrics.BuildCacheLookups.WithLabelValues(cacheTarget, "hit").Inc()
+		} else {
+			metrics.BuildCacheLookups.WithLabelValues(cacheTarget, "miss").Inc()
 		}
 
 		// Fast path: cache hit and no OnTest to run. Skip source clone
@@ -269,9 +279,11 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		// TODO(MeteorsLiu): Support different code host
 		repo, err := b.newRepo(fmt.Sprintf("github.com/%s", mod.Path))
 		if err != nil {
+			metrics.BuildFailures.WithLabelValues("source_sync").Inc()
 			return Result{}, err
 		}
 		if err := repo.Sync(ctx, mod.Version, "", tmpSourceDir); err != nil {
+			metrics.BuildFailures.WithLabelValues("source_sync").Inc()
 			return Result{}, err
 		}
 
@@ -305,6 +317,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 				var out classfile.BuildResult
 				mod.OnBuild(buildContext, project, &out)
 				if len(out.Errs()) > 0 {
+					metrics.BuildFailures.WithLabelValues("on_build").Inc()
 					return errors.Join(out.Errs()...)
 				}
 				metadata = out.Metadata()
@@ -333,6 +346,7 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 				Deps:     deps,
 			})
 			if err != nil {
+				metrics.BuildFailures.WithLabelValues("cache_put").Inc()
 				return Result{}, err
 			}
 			metadata = entry.Metadata
@@ -369,8 +383,13 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 	sort.Strings(lockPaths)
 	unlocks := make([]func(), 0, len(lockPaths))
 	for _, path := range lockPaths {
+		started := time.Now()
+		metrics.BuildLockWaiters.WithLabelValues(path).Inc()
 		unlock, err := b.store.LockModule(path)
+		metrics.BuildLockWaiters.WithLabelValues(path).Dec()
+		metrics.BuildLockWaitDuration.Observe(time.Since(started).Seconds())
 		if err != nil {
+			metrics.BuildFailures.WithLabelValues("lock").Inc()
 			for i := len(unlocks) - 1; i >= 0; i-- {
 				unlocks[i]()
 			}

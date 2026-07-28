@@ -8,18 +8,21 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/internal/metrics"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/mod/module"
 	"golang.org/x/sync/singleflight"
@@ -72,8 +75,18 @@ func New(opts Options) http.Handler {
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
+	outcome := "success"
+	metrics.RequestsInFlight.Inc()
+	defer func() {
+		metrics.RequestsInFlight.Dec()
+		metrics.RequestsTotal.WithLabelValues(outcome).Inc()
+		metrics.RequestDuration.WithLabelValues(outcome).Observe(time.Since(started).Seconds())
+	}()
+
 	w.Header().Set("Content-Type", "application/x-cmdjsonl")
 	if r.Method != http.MethodGet {
+		outcome = "client_error"
 		w.Header().Set("Allow", http.MethodGet)
 		writeCommand(w, "error", "method not allowed")
 		return
@@ -81,6 +94,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	req, err := parseRequest(r)
 	if err != nil {
+		outcome = "client_error"
 		writeCommand(w, "error", err.Error())
 		return
 	}
@@ -89,6 +103,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	result, err := h.do(r.Context(), req, info)
 	info.flush()
 	if err != nil {
+		outcome = "server_error"
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			outcome = "canceled"
+		}
 		writeCommand(w, "error", err.Error())
 		return
 	}
@@ -99,14 +117,29 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) do(ctx context.Context, req request, info io.Writer) (result, error) {
 	key := requestKey(req)
-	stream, _ := h.infos.LoadOrStore(key, newFanout())
+	stream, shared := h.infos.LoadOrStore(key, newFanout())
+	if shared {
+		metrics.BuildSharedRequests.Inc()
+	}
 	fanout := stream.(*fanout)
 	remove := fanout.add(info)
 	defer remove()
 
 	call := h.group.DoChan(key, func() (any, error) {
+		started := time.Now()
+		outcome := "success"
+		metrics.BuildsInProgress.WithLabelValues(key).Inc()
+		defer func() {
+			metrics.BuildsInProgress.WithLabelValues(key).Dec()
+			metrics.BuildsTotal.WithLabelValues(outcome).Inc()
+			metrics.BuildDuration.WithLabelValues(outcome).Observe(time.Since(started).Seconds())
+		}()
 		defer h.infos.Delete(key)
-		return h.build(context.WithoutCancel(ctx), req, fanout)
+		result, err := h.build(context.WithoutCancel(ctx), req, fanout)
+		if err != nil {
+			outcome = "server_error"
+		}
+		return result, err
 	})
 	select {
 	case <-ctx.Done():
@@ -125,6 +158,7 @@ func (h *handler) build(ctx context.Context, req request, info io.Writer) (resul
 		Matrix:       req.matrix,
 	})
 	if err != nil {
+		metrics.BuildFailures.WithLabelValues("resolve").Inc()
 		return result{}, err
 	}
 
@@ -153,6 +187,7 @@ func (h *handler) build(ctx context.Context, req request, info io.Writer) (resul
 			MatrixStr: req.matrixStr,
 		})
 		if err != nil {
+			metrics.BuildFailures.WithLabelValues("artifact_get").Inc()
 			return result{}, err
 		}
 		item := artifactMessage{
