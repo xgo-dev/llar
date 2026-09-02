@@ -10,7 +10,7 @@ import (
 	"github.com/goplus/llar/internal/formula"
 )
 
-func injectTarget(f *formula.Formula, version string, matrix classfile.Matrix) {
+func injectMatrix(f *formula.Formula, matrix classfile.Matrix) {
 	formulaElem := reflect.ValueOf(f).Elem()
 	structElem := valueOf(formulaElem, "structElem").(reflect.Value)
 	target := valueOf(structElem, "target").(classfile.Matrix)
@@ -26,7 +26,6 @@ func injectTarget(f *formula.Formula, version string, matrix classfile.Matrix) {
 	for key, values := range matrix.Options {
 		effective.Options[key] = slices.Clone(values)
 	}
-	setValue(structElem, "targetVersion", version)
 	setValue(structElem, "target", effective)
 }
 

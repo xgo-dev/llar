@@ -67,7 +67,6 @@ func TestGopt_ModuleF_Main(t *testing.T) {
 
 func TestModuleF_TargetReturnsMatrixCopy(t *testing.T) {
 	f := &ModuleF{}
-	f.targetVersion = "release/1.2.3"
 	f.target = Matrix{
 		Require: map[string][]string{
 			"os": {"linux"},
@@ -78,9 +77,6 @@ func TestModuleF_TargetReturnsMatrixCopy(t *testing.T) {
 	}
 
 	target := f.Target()
-	if got := target.Version(); got != "release/1.2.3" {
-		t.Fatalf("target.version = %q, want %q", got, "release/1.2.3")
-	}
 	target.Require()["os"] = []string{"darwin"}
 	target.Require()["arch"] = []string{"arm64"}
 	target.Options()["debug"] = []string{"on"}

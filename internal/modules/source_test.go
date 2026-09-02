@@ -147,7 +147,7 @@ func TestFormulaModule_AtReturnsIsolatedClasses(t *testing.T) {
 				want = true
 				wantDeps = 1
 			}
-			injectTarget(f, "1.0.0", classfile.Matrix{
+			injectMatrix(f, classfile.Matrix{
 				Require: map[string][]string{"os": {"linux"}},
 				Options: map[string][]string{"ssl": {ssl}},
 			})
@@ -172,37 +172,6 @@ func TestFormulaModule_AtReturnsIsolatedClasses(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-	}
-}
-
-func TestFormulaModule_AtInjectsTargetVersion(t *testing.T) {
-	mod := newFormulaModule(os.DirFS("testdata/load/towner/targetversion"), "towner/targetversion", classfile.Matrix{}, &mockVCSRepo{})
-
-	for _, version := range []string{"1.0.0", "release/1.1.0"} {
-		f, err := mod.at(version)
-		if err != nil {
-			t.Fatalf("at(%q) failed: %v", version, err)
-		}
-		if !f.Filter() {
-			t.Fatalf("Filter() for %q = false, want true", version)
-		}
-
-		var deps classfile.ModuleDeps
-		f.OnRequire(&classfile.Project{}, &deps)
-		gotDeps := deps.Deps()
-		if len(gotDeps) != 1 || gotDeps[0].Version != version {
-			t.Fatalf("OnRequire deps for %q = %+v, want selected version", version, gotDeps)
-		}
-
-		ctx := &classfile.Context{}
-		f.OnBuild(ctx)
-		if got := ctx.Out.Metadata(); got != version {
-			t.Fatalf("OnBuild metadata for %q = %q, want selected version", version, got)
-		}
-	}
-
-	if len(mod.formulas) != 1 {
-		t.Fatalf("cached formulas = %d, want 1", len(mod.formulas))
 	}
 }
 

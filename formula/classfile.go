@@ -28,10 +28,9 @@ type ModuleF struct {
 	fOnTest    func(ctx *Context)
 	fFilter    func() bool
 
-	modPath       string
-	modFromVer    string
-	targetVersion string
-	target        Matrix
+	modPath    string
+	modFromVer string
+	target     Matrix
 }
 
 type Matrix struct {
@@ -40,9 +39,8 @@ type Matrix struct {
 	DefaultOptions map[string][]string
 }
 
-type formulaTarget struct {
-	version string
-	m       Matrix
+type matrixTarget struct {
+	m Matrix
 }
 
 // Combinations returns all cartesian product combinations of the matrix.
@@ -136,32 +134,23 @@ func (p *ModuleF) app() *gsh.App {
 	return &p.App
 }
 
-func (p *ModuleF) Target() formulaTarget {
-	return formulaTarget{
-		version: p.targetVersion,
-		m: Matrix{
-			Require: maps.Clone(p.target.Require),
-			Options: maps.Clone(p.target.Options),
-		},
-	}
-}
-
-// Version backs the XGo auto-property `target.version`.
-// It is the original version or ref selected by LLAR.
-func (t formulaTarget) Version() string {
-	return t.version
+func (p *ModuleF) Target() matrixTarget {
+	return matrixTarget{m: Matrix{
+		Require: maps.Clone(p.target.Require),
+		Options: maps.Clone(p.target.Options),
+	}}
 }
 
 // Require backs the XGo auto-property `target.require`.
 // In formula DSL, target.require["xxx"] maps to Target().Require()["xxx"].
-func (t formulaTarget) Require() map[string][]string {
-	return t.m.Require
+func (m matrixTarget) Require() map[string][]string {
+	return m.m.Require
 }
 
 // Options backs the XGo auto-property `target.options`.
 // In formula DSL, target.options["xxx"] maps to Target().Options()["xxx"].
-func (t formulaTarget) Options() map[string][]string {
-	return t.m.Options
+func (m matrixTarget) Options() map[string][]string {
+	return m.m.Options
 }
 
 // Defaults sets the formula's default option selections and initializes
