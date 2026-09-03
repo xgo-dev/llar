@@ -29,6 +29,13 @@ jobs:
           persist-credentials: false
           allow-unsafe-pr-checkout: true
 
+      - name: Configure Go environment
+        run: |
+          echo "GOPATH=${RUNNER_TEMP}/go" >> "$GITHUB_ENV"
+          echo "GOBIN=${RUNNER_TEMP}/go/bin" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=${RUNNER_TEMP}/go/pkg/mod" >> "$GITHUB_ENV"
+          echo "GOCACHE=${RUNNER_TEMP}/go-build-cache" >> "$GITHUB_ENV"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -138,6 +145,13 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+
+      - name: Configure Go environment
+        run: |
+          echo "GOPATH=${RUNNER_TEMP}/go" >> "$GITHUB_ENV"
+          echo "GOBIN=${RUNNER_TEMP}/go/bin" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=${RUNNER_TEMP}/go/pkg/mod" >> "$GITHUB_ENV"
+          echo "GOCACHE=${RUNNER_TEMP}/go-build-cache" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5
