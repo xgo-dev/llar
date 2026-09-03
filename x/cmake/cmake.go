@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/goplus/llar/internal/execbroker"
 )
@@ -48,6 +49,16 @@ func (c *CMake) BuildType(name string) { c.buildType = name }
 // Toolchain sets CMAKE_TOOLCHAIN_FILE.
 func (c *CMake) Toolchain(path string) { c.toolchain = path }
 
+// Sysroot sets the target system root for both generic and Apple targets.
+func (c *CMake) Sysroot(root string) {
+	c.Define("CMAKE_SYSROOT", root)
+	c.Define("CMAKE_OSX_SYSROOT", root)
+	c.Define("CMAKE_FIND_ROOT_PATH_MODE_PROGRAM", "NEVER")
+	c.Define("CMAKE_FIND_ROOT_PATH_MODE_LIBRARY", "ONLY")
+	c.Define("CMAKE_FIND_ROOT_PATH_MODE_INCLUDE", "ONLY")
+	c.Define("CMAKE_FIND_ROOT_PATH_MODE_PACKAGE", "ONLY")
+}
+
 // Define adds a -D<key>:STRING=<value> definition.
 func (c *CMake) Define(key, value string) {
 	c.defines[key] = defineValue{value: value, typeName: "STRING"}
@@ -81,6 +92,7 @@ func (c *CMake) Use(root string) {
 		}
 	}
 	prependPath("CMAKE_PREFIX_PATH", root)
+	prependPath("CMAKE_FIND_ROOT_PATH", root)
 	if hasInclude {
 		prependPath("CMAKE_INCLUDE_PATH", includeDir)
 	}
@@ -123,6 +135,9 @@ func (c *CMake) Configure(args ...string) {
 	}
 	if c.buildType != "" {
 		cmakeArgs = append(cmakeArgs, "-DCMAKE_BUILD_TYPE:STRING="+c.buildType)
+	}
+	if roots := execbroker.Getenv("CMAKE_FIND_ROOT_PATH"); roots != "" {
+		cmakeArgs = append(cmakeArgs, "-DCMAKE_FIND_ROOT_PATH:STRING="+strings.Join(filepath.SplitList(roots), ";"))
 	}
 	cmakeArgs = append(cmakeArgs, c.definesArgs()...)
 	cmakeArgs = append(cmakeArgs, args...)

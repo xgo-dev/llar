@@ -133,7 +133,21 @@ func TestLLARDE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	crossMatrix := classfile.Matrix{Require: map[string][]string{
+		"arch": {"arm64"},
+		"os":   {"linux"},
+	}}
+	cross := *s
+	cross.matrix = crossMatrix
+	cross.matrixStr = crossMatrix.Combinations()[0]
+	cross.query = url.Values{
+		"arch": {"arm64"},
+		"os":   {"linux"},
+	}.Encode()
 	if err := s.deleteArtifacts(ctx, zlibTarget, libpngTarget, cjsonTarget); err != nil {
+		t.Fatal(err)
+	}
+	if err := cross.deleteArtifacts(ctx, zlibTarget); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -141,6 +155,9 @@ func TestLLARDE2E(t *testing.T) {
 		defer cancel()
 		if err := s.deleteArtifacts(ctx, zlibTarget, libpngTarget, cjsonTarget); err != nil {
 			t.Errorf("cleanup artifacts: %v", err)
+		}
+		if err := cross.deleteArtifacts(ctx, zlibTarget); err != nil {
+			t.Errorf("cleanup cross-compile artifact: %v", err)
 		}
 	})
 
@@ -152,6 +169,7 @@ func TestLLARDE2E(t *testing.T) {
 		{"warm zlib request reuses stored artifact", s.warmZlibBuild},
 		{"concurrent zlib requests run one build", s.concurrentZlibBuild},
 		{"concurrent roots share canonical zlib artifact", s.concurrentSharedDependency},
+		{"cross-compile zlib for Linux arm64", cross.crossCompileZlib},
 		{"protocol errors use command JSON lines", s.protocolErrors},
 	} {
 		start := time.Now()
@@ -435,6 +453,70 @@ func (s *suite) concurrentSharedDependency(ctx context.Context) error {
 	}
 	if !reflect.DeepEqual(zlibArtifacts[0], zlibArtifacts[1]) {
 		return fmt.Errorf("shared zlib artifacts differ: %+v != %+v", zlibArtifacts[0], zlibArtifacts[1])
+	}
+	return nil
+}
+
+func (s *suite) crossCompileZlib(ctx context.Context) error {
+	before, err := s.buildCounts(ctx)
+	if err != nil {
+		return err
+	}
+	got, err := s.get(ctx, s.cfg.baseURL, zlibTarget)
+	if err != nil {
+		return err
+	}
+	if err := s.requireSuccess(got, zlibTarget); err != nil {
+		return err
+	}
+	after, err := s.buildCounts(ctx)
+	if err != nil {
+		return err
+	}
+	if delta := after[zlibTarget.key()] - before[zlibTarget.key()]; delta != 1 {
+		return fmt.Errorf("cross-compile zlib build count = %d, want 1", delta)
+	}
+	if got.upstream == "" {
+		return errors.New("cross-compile nginx response has no X-Upstream-Addr")
+	}
+	if _, ok := s.upstreams[got.upstream]; !ok {
+		return fmt.Errorf("cross-compile nginx upstream = %q, workers = %v", got.upstream, s.upstreams)
+	}
+
+	hasTarget := false
+	hasSysroot := false
+	for _, line := range got.infos {
+		if strings.Contains(line, "--target=aarch64-linux-gnu") {
+			hasTarget = true
+		}
+		if strings.Contains(line, "bminor/glibc@glibc-2.24-") {
+			hasSysroot = true
+		}
+	}
+	if !hasTarget {
+		return fmt.Errorf("cross-compile info has no ARM64 GNU target:\n%s", strings.Join(got.infos, "\n"))
+	}
+	if !hasSysroot {
+		return fmt.Errorf("cross-compile info has no default glibc sysroot:\n%s", strings.Join(got.infos, "\n"))
+	}
+
+	message := got.artifacts[0]
+	if len(message.Deps) != 0 {
+		return fmt.Errorf("cross-compile zlib deps = %q, want hidden sysroot", message.Deps)
+	}
+	info, checksum, err := s.downloadArtifact(ctx, message)
+	if err != nil {
+		return err
+	}
+	if info.Metadata != zlibTarget.metadata {
+		return fmt.Errorf("cross-compile zlib metadata = %q, want %q", info.Metadata, zlibTarget.metadata)
+	}
+	stored, err := s.artifacts.Get(ctx, s.artifactKey(zlibTarget))
+	if err != nil {
+		return err
+	}
+	if stored.Source.URL != message.URL || stored.Checksum != checksum {
+		return fmt.Errorf("stored cross-compile zlib artifact = %+v, response URL %q checksum %q", stored, message.URL, checksum)
 	}
 	return nil
 }

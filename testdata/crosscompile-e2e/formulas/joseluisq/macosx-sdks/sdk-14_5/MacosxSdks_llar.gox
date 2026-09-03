@@ -1,0 +1,8 @@
+id "joseluisq/macosx-sdks"
+
+fromVer "14.5"
+
+onBuild ctx => {
+	exec! "./install-sysroot", ctx.outputDir, "1"
+	ctx.setMetadata "--sysroot="+ctx.outputDir
+}

@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+output_dir=$1
+source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+set -- "$source_dir"/aarch64--*--stable-*.tar.bz2
+if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+	echo "expected one Bootlin toolchain archive" >&2
+	exit 1
+fi
+archive=$1
+
+case $(basename -- "$archive") in
+	aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2)
+		root=aarch64--glibc--stable
+		tuple=aarch64-buildroot-linux-gnu
+		gcc_version=5.4.0
+		;;
+	aarch64--glibc--stable-2018.11-1.tar.bz2)
+		root=aarch64--glibc--stable-2018.11-1
+		tuple=aarch64-buildroot-linux-gnu
+		gcc_version=7.3.0
+		;;
+	aarch64--musl--stable-2018.11-1.tar.bz2)
+		root=aarch64--musl--stable-2018.11-1
+		tuple=aarch64-buildroot-linux-musl
+		gcc_version=7.3.0
+		;;
+	*)
+		echo "unsupported Bootlin toolchain archive: $(basename -- "$archive")" >&2
+		exit 1
+		;;
+esac
+
+mkdir -p "$output_dir"
+LC_ALL=C tar -xjf "$archive" -C "$output_dir" --strip-components=3 \
+	"$root/$tuple/sysroot" \
+	"$root/lib/gcc/$tuple/$gcc_version"
+
+# Clang needs the target GCC runtime, for example crtbeginS.o and libgcc.a,
+# beside the target libc when configure links compiler probes.
+runtime_dir="$output_dir/$tuple/$gcc_version"
+mkdir -p "$output_dir/usr/lib"
+cp -a "$runtime_dir/." "$output_dir/usr/lib/"
+rm -r "$output_dir/$tuple"

@@ -1,0 +1,8 @@
+id "ifduyue/musl"
+
+fromVer "v1.1.19"
+
+onBuild ctx => {
+	exec! "./install-sysroot", ctx.outputDir
+	ctx.setMetadata "--sysroot="+ctx.outputDir
+}

@@ -1,0 +1,29 @@
+id "libuv/libuv"
+
+fromVer "v1.49.2"
+
+onRequire (proj, deps) => {
+	if libc := target.require["libc"]; len(libc) > 0 && libc[0] == "musl-1.1.19" {
+		deps.require "ifduyue/musl", "v1.1.19"
+	}
+}
+
+onBuild ctx => {
+	installDir := ctx.outputDir
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	for _, dep := range ctx.Proj.Deps {
+		if dep.Path == "ifduyue/musl" {
+			c.sysroot ctx.outputDir(dep)
+		}
+	}
+	c.buildType "Release"
+	c.defineBool "CMAKE_VERBOSE_MAKEFILE", true
+	c.defineBool "LIBUV_BUILD_SHARED", false
+	c.defineBool "BUILD_TESTING", false
+	c.configure
+	c.build
+	c.install
+
+	ctx.setMetadata "-luv -pthread -ldl -lrt"
+}

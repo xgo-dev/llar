@@ -2,10 +2,23 @@ id "madler/zlib"
 
 fromVer "v1.3.1"
 
+onRequire (proj, deps) => {
+	if libc := target.require["libc"]; len(libc) > 0 {
+		if libc[0] == "glibc-2.27" {
+			deps.require "bminor/glibc", libc[0]
+		}
+	}
+}
+
 onBuild ctx => {
 	installDir := ctx.outputDir
 
 	a := autotools.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	for _, dep := range ctx.Proj.Deps {
+		if dep.Path == "bminor/glibc" {
+			a.sysroot ctx.outputDir(dep)
+		}
+	}
 
 	a.configure "--static"
 	a.build

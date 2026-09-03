@@ -28,6 +28,7 @@ type Builder struct {
 	stderr       io.Writer
 	workspaceDir string
 	cache        cache.Cache
+	target       Target
 	newRepo      func(repoPath string) (vcs.Repo, error) // defaults to vcs.NewRepo
 }
 
@@ -52,6 +53,7 @@ type Options struct {
 	Stderr       io.Writer
 	WorkspaceDir string
 	Cache        cache.Cache
+	Target       Target
 }
 
 func runFormulaHook(fn func()) (err error) {
@@ -111,6 +113,7 @@ func NewBuilder(opts Options) (*Builder, error) {
 		stderr:       stderr,
 		workspaceDir: workspaceDir,
 		cache:        c,
+		target:       opts.Target,
 		newRepo:      vcs.NewRepo,
 	}, nil
 }
@@ -244,6 +247,11 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 		rootID = module.Version{Path: targets[0].Path, Version: targets[0].Version}
 	}
 
+	var commandMiddleware execbroker.Middleware
+	if b.target != nil {
+		commandMiddleware = targetMiddleware(b.target)
+	}
+
 	build := func(mod *modules.Module) (Result, error) {
 		isRoot := mod.Path == rootID.Path && mod.Version == rootID.Version
 		testThisMod := b.runTest && isRoot && mod.OnTest != nil
@@ -307,10 +315,11 @@ func (b *Builder) Build(ctx context.Context, targets []*modules.Module) ([]Resul
 
 		var metadata string
 		if err := execbroker.Do(execbroker.Scope{
-			Dir:    tmpSourceDir,
-			Stdin:  os.Stdin,
-			Stdout: b.stdout,
-			Stderr: b.stderr,
+			Dir:        tmpSourceDir,
+			Stdin:      os.Stdin,
+			Stdout:     b.stdout,
+			Stderr:     b.stderr,
+			Middleware: commandMiddleware,
 		}, func() error {
 			// Run OnBuild only on cache miss; reuse cached metadata otherwise.
 			if cacheHit {

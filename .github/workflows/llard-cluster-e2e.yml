@@ -42,6 +42,12 @@ jobs:
         with:
           go-version: 1.25.x
 
+      - name: Install LLVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-18 lld-18 llvm-18
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+
       - name: Join private network
         uses: tailscale/github-action@v4
         with:
@@ -55,18 +61,40 @@ jobs:
           go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llard" ./cmd/llard
           go build -o "$RUNNER_TEMP/llard-e2e-control" ./testdata/llard-e2e/control
 
-      - name: Prepare formula repository
+      - name: Download Bootlin glibc arm64 toolchain
+        run: |
+          archive="$RUNNER_TEMP/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2"
+          curl --fail --location --retry 3 \
+            "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2" \
+            --output "$archive"
+          echo "530137589c4588599ebd115c12630c75e79c935ac4f34b0941404036f5e25026  $archive" | sha256sum --check
+
+      - name: Prepare formula and source repositories
         run: |
           formula_repo="$RUNNER_TEMP/llarhub"
-          mkdir -p "$formula_repo"
+          source_repo="$RUNNER_TEMP/glibc-source"
+          mkdir -p "$formula_repo" "$source_repo"
           cp -R testdata/kodo-e2e/formulas/. "$formula_repo/"
+          cp -R testdata/crosscompile-e2e/formulas/bminor "$formula_repo/"
           git -C "$formula_repo" init --initial-branch=main
           git -C "$formula_repo" config user.email llard-e2e@example.com
           git -C "$formula_repo" config user.name "LLARD E2E"
           git -C "$formula_repo" add .
           git -C "$formula_repo" commit -m "LLARD E2E formulas"
+
+          cp testdata/crosscompile-e2e/install-bootlin-sysroot "$source_repo/install-sysroot"
+          cp "$RUNNER_TEMP/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2" "$source_repo/"
+          chmod +x "$source_repo/install-sysroot"
+          git -C "$source_repo" init --initial-branch=main
+          git -C "$source_repo" config user.email llard-e2e@example.com
+          git -C "$source_repo" config user.name "LLARD E2E"
+          git -C "$source_repo" add .
+          git -C "$source_repo" commit --quiet -m "Add glibc 2.24 toolchain"
+          git -C "$source_repo" tag glibc-2.24
+
           git config --global protocol.file.allow always
           git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
+          git config --global url."file://$source_repo".insteadOf "https://github.com/bminor/glibc.git"
 
       - name: Run llard
         env:

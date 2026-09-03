@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -53,11 +54,11 @@ func TestParseRequest(t *testing.T) {
 		},
 		{
 			name:        "require and options",
-			target:      "/v1/artifacts/madler/zlib@v1.3.1?os=linux&arch=amd64&debug=OFF&shared=ON",
+			target:      "/v1/artifacts/madler/zlib@v1.3.1?os=linux&arch=amd64&libc=glibc-2.13&debug=OFF&shared=ON",
 			wantModule:  "madler/zlib",
 			wantVer:     "v1.3.1",
-			wantMatrix:  "amd64-linux|OFF-ON",
-			wantRequire: map[string][]string{"arch": {"amd64"}, "os": {"linux"}},
+			wantMatrix:  "amd64-glibc-2.13-linux|OFF-ON",
+			wantRequire: map[string][]string{"arch": {"amd64"}, "libc": {"glibc-2.13"}, "os": {"linux"}},
 			wantOptions: map[string][]string{"debug": {"OFF"}, "shared": {"ON"}},
 		},
 		{name: "wrong path", target: "/v1/modules/madler/zlib?os=linux", wantErr: "artifact path not found"},
@@ -94,7 +95,7 @@ func TestParseRequest(t *testing.T) {
 			for key, values := range req.query {
 				values[0] = "changed"
 				matrixValues := req.matrix.Options[key]
-				if key == "os" || key == "arch" {
+				if key == "os" || key == "arch" || key == "libc" {
 					matrixValues = req.matrix.Require[key]
 				}
 				if matrixValues[0] == "changed" {
@@ -163,7 +164,8 @@ func TestServeHTTPSingleflight(t *testing.T) {
 		Artifacts:    artifacts,
 		WorkspaceDir: t.TempDir(),
 	}).(*handler)
-	const target = "/v1/artifacts/DaveGamble/cJSON@v1.7.18?os=linux&arch=amd64"
+	query := "arch=" + runtime.GOARCH + "&os=" + runtime.GOOS
+	target := "/v1/artifacts/DaveGamble/cJSON@v1.7.18?" + query
 
 	var recorders [2]*httptest.ResponseRecorder
 	var wg sync.WaitGroup
@@ -182,7 +184,7 @@ func TestServeHTTPSingleflight(t *testing.T) {
 
 	wg.Add(1)
 	go serve(1)
-	key := "DaveGamble/cJSON@v1.7.18?arch=amd64&os=linux"
+	key := "DaveGamble/cJSON@v1.7.18?" + query
 	waitFor(t, func() bool {
 		stream, ok := h.infos.Load(key)
 		if !ok {
@@ -206,10 +208,11 @@ func TestServeHTTPSingleflight(t *testing.T) {
 		t.Fatalf("artifact Get calls = %d, want 2", got)
 	}
 
+	jsonQuery := strings.ReplaceAll(query, "&", `\u0026`)
 	wantLines := []string{
-		`info "resolving DaveGamble/cJSON@v1.7.18?arch=amd64\u0026os=linux"`,
-		`artifact {"id":"madler/zlib@v1.3.1?arch=amd64\u0026os=linux","type":"tar.gz","url":"https://artifacts.example/madler/zlib"}`,
-		`artifact {"id":"DaveGamble/cJSON@v1.7.18?arch=amd64\u0026os=linux","type":"tar.gz","url":"https://artifacts.example/DaveGamble/cJSON","deps":["madler/zlib@v1.3.1?arch=amd64\u0026os=linux"]}`,
+		`info "resolving DaveGamble/cJSON@v1.7.18?` + jsonQuery + `"`,
+		`artifact {"id":"madler/zlib@v1.3.1?` + jsonQuery + `","type":"tar.gz","url":"https://artifacts.example/madler/zlib"}`,
+		`artifact {"id":"DaveGamble/cJSON@v1.7.18?` + jsonQuery + `","type":"tar.gz","url":"https://artifacts.example/DaveGamble/cJSON","deps":["madler/zlib@v1.3.1?` + jsonQuery + `"]}`,
 	}
 	gotLines := strings.Split(strings.TrimSpace(recorders[0].Body.String()), "\n")
 	if len(gotLines) != len(wantLines) {
@@ -260,6 +263,54 @@ func TestServeHTTPBuildErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildCrossCompileTarget(t *testing.T) {
+	targetArch := "amd64"
+	if runtime.GOOS == "linux" && runtime.GOARCH == targetArch {
+		targetArch = "arm64"
+	}
+	target := "/v1/artifacts/madler/zlib@v1.3.1?arch=" + targetArch + "&libc=custom&os=linux"
+	req, err := parseRequest(httptest.NewRequest(http.MethodGet, target, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("success", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, name := range []string{"clang", "clang++", "ld.lld", "llvm-ar", "llvm-ranlib", "llvm-nm", "llvm-strip"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("tool"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Setenv("PATH", dir)
+		h := New(Options{
+			FormulaStore: localFormulas(t),
+			Cache:        &testCache{},
+			Artifacts:    &testArtifactStore{},
+			WorkspaceDir: t.TempDir(),
+		}).(*handler)
+		result, err := h.build(context.Background(), req, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.artifacts) != 1 || !strings.HasPrefix(result.artifacts[0].ID, "madler/zlib@v1.3.1?") {
+			t.Fatalf("build artifacts = %+v", result.artifacts)
+		}
+	})
+
+	t.Run("toolchain error", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		h := New(Options{
+			FormulaStore: localFormulas(t),
+			Cache:        &testCache{},
+			WorkspaceDir: t.TempDir(),
+		}).(*handler)
+		_, err := h.build(context.Background(), req, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "prepare C toolchain") {
+			t.Fatalf("build error = %v, want toolchain error", err)
+		}
+	})
 }
 
 func TestDoReturnsCanceledContext(t *testing.T) {

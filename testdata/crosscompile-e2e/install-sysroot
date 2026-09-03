@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+source_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+tar -xJf "$source_dir/sysroot.tar.xz" -C "$1" --strip-components="$2"
