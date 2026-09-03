@@ -2,10 +2,7 @@ name: Kodo E2E
 
 on:
   push:
-    branches:
-      - "**"
-      - "!dependabot/**"
-      - "!xgopilot/**"
+    branches: [main]
   pull_request_target:
     branches: [ "**" ]
 

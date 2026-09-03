@@ -2,6 +2,7 @@ name: LLARD Cluster E2E
 
 on:
   push:
+    branches: [main]
   pull_request_target:
     branches: ["**"]
 
