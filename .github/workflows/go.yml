@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: [qiniu, ubuntu-24.04]
     strategy:
       matrix:
         go:

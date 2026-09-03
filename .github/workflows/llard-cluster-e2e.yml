@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   workers:
-    runs-on: ubuntu-latest
+    runs-on: [qiniu, ubuntu-24.04]
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -130,7 +130,7 @@ jobs:
           wait -n "$llard_pid" "$control_pid"
 
   nginx:
-    runs-on: ubuntu-latest
+    runs-on: [qiniu, ubuntu-24.04]
     timeout-minutes: 25
     env:
       WORKER_1: llar-${{ github.run_id }}-${{ github.run_attempt }}-worker-1

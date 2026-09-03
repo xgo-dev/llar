@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   kodo-artifact:
-    runs-on: ubuntu-latest
+    runs-on: [qiniu, ubuntu-24.04]
     steps:
       - name: Check out code
         uses: actions/checkout@v4
