@@ -2,9 +2,11 @@
 package autotools
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/x/pkgconfig"
@@ -75,9 +77,55 @@ func (a *AutoTools) Configure(args ...string) {
 	}
 	flags := make([]string, 0, 1+len(args))
 	if a.installDir != "" {
-		flags = append(flags, "--prefix="+a.installDir)
+		prefix := a.installDir
+		// Keep the pipe character out of generated Autotools shell recipes
+		// without changing the physical output directory.
+		if strings.ContainsRune(prefix, '|') {
+			prefix = a.shellSafePrefix(dir, prefix)
+		}
+		flags = append(flags, "--prefix="+prefix)
 	}
 	a.run(exe, append(flags, args...))
+}
+
+func (a *AutoTools) shellSafePrefix(workDir, installDir string) string {
+	workDir, err := filepath.Abs(workDir)
+	if err != nil {
+		panic(err)
+	}
+	alias := filepath.Join(workDir, ".llar-prefix")
+	target := installDir
+	if !filepath.IsAbs(target) {
+		target, err = filepath.Abs(filepath.Join(workDir, target))
+		if err != nil {
+			panic(err)
+		}
+	}
+	// A dangling symlink cannot be used by mkdir -p to create its children.
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		panic(err)
+	}
+
+	info, err := os.Lstat(alias)
+	switch {
+	case os.IsNotExist(err):
+		if err := os.Symlink(target, alias); err != nil {
+			panic(err)
+		}
+	case err != nil:
+		panic(err)
+	case info.Mode()&os.ModeSymlink == 0:
+		panic(fmt.Errorf("autotools prefix alias %q already exists and is not a symlink", alias))
+	default:
+		got, err := os.Readlink(alias)
+		if err != nil {
+			panic(err)
+		}
+		if got != target {
+			panic(fmt.Errorf("autotools prefix alias %q points to %q, want %q", alias, got, target))
+		}
+	}
+	return alias
 }
 
 // Build runs "make" with optional extra arguments.

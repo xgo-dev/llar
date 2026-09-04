@@ -222,6 +222,40 @@ func TestConfigureBuildInstallE2E(t *testing.T) {
 	}
 }
 
+func TestConfigureBuildInstallWithPipeInPrefix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the shell metacharacter path is not a valid Windows directory name")
+	}
+	for _, bin := range []string{"make", "cc", "ar"} {
+		if _, err := exec.LookPath(bin); err != nil {
+			t.Skipf("%s not found in PATH", bin)
+		}
+	}
+
+	tmp := t.TempDir()
+	installDir := filepath.Join(tmp, "install|matrix")
+	buildDir := filepath.Join(tmp, "build")
+
+	absSource, err := filepath.Abs(filepath.Join("testdata", "project"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := New(absSource, buildDir, installDir)
+	a.Configure()
+	a.Build()
+	a.Install()
+
+	for _, path := range []string{
+		filepath.Join(installDir, "lib", "libdummy.a"),
+		filepath.Join(installDir, "include", "dummy.h"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("missing %s: %v", path, err)
+		}
+	}
+}
+
 func TestConfigureNoPrefix(t *testing.T) {
 	for _, bin := range []string{"make", "cc", "ar"} {
 		if _, err := exec.LookPath(bin); err != nil {
