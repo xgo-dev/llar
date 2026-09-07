@@ -1,0 +1,24 @@
+name: Qiniu large disk probe
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/qiniu-disk-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  disk:
+    runs-on: [qiniu, ubuntu-24.04-large]
+    timeout-minutes: 5
+    steps:
+      - name: Report filesystem capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: $RUNNER_NAME ($RUNNER_OS/$RUNNER_ARCH)"
+          df -hT / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          df -B1 / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          df -i / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          lsblk -b -o NAME,SIZE,TYPE,MOUNTPOINTS
