@@ -29,6 +29,16 @@ func New(sourceDir, buildDir, installDir string) *AutoTools {
 // Source overrides the source directory.
 func (a *AutoTools) Source(dir string) { a.sourceDir = dir }
 
+// Sysroot sets the target system root for the compiler and linker. Both
+// compiler spellings are supplied so the same Formula works for generic and
+// Apple targets.
+func (a *AutoTools) Sysroot(root string) {
+	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
+		appendFlag(key, "--sysroot="+root)
+		appendFlag(key, "-isysroot"+root)
+	}
+}
+
 // Use configures the process environment so that Autotools, compilers, and
 // pkg-config find a non-system dependency installed at root.
 func (a *AutoTools) Use(root string) {

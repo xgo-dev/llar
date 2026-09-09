@@ -1,0 +1,8 @@
+{
+	"path": "llar/pkgconfig-consumer",
+	"deps": {
+		"v1.0.0": [
+			{"path": "madler/zlib", "version": "v1.3.1"}
+		]
+	}
+}

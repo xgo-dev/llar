@@ -1,0 +1,430 @@
+name: Cross Compile E2E (Linux hosts to arm64 targets)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crosscompile-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-linux-arm64:
+    name: "Build C libs: Linux amd64 -> Linux arm64"
+    runs-on: [qiniu, ubuntu-24.04]
+    timeout-minutes: 25
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Configure Go environment
+        run: |
+          echo "GOPATH=${RUNNER_TEMP}/go" >> "$GITHUB_ENV"
+          echo "GOBIN=${RUNNER_TEMP}/go/bin" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=${RUNNER_TEMP}/go/pkg/mod" >> "$GITHUB_ENV"
+          echo "GOCACHE=${RUNNER_TEMP}/go-build-cache" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+
+      - name: Install LLVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-18 cmake lld-18 llvm-18 pkg-config
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+
+      - name: Download Bootlin glibc and musl arm64 toolchains
+        run: |
+          default_archive="$RUNNER_TEMP/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2"
+          custom_archive="$RUNNER_TEMP/aarch64--glibc--stable-2018.11-1.tar.bz2"
+          musl_archive="$RUNNER_TEMP/aarch64--musl--stable-2018.11-1.tar.bz2"
+
+          curl --fail --location --retry 3 \
+            "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2" \
+            --output "$default_archive"
+          curl --fail --location --retry 3 \
+            "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--glibc--stable-2018.11-1.tar.bz2" \
+            --output "$custom_archive"
+          curl --fail --location --retry 3 \
+            "https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/aarch64--musl--stable-2018.11-1.tar.bz2" \
+            --output "$musl_archive"
+          echo "530137589c4588599ebd115c12630c75e79c935ac4f34b0941404036f5e25026  $default_archive" | sha256sum --check
+          echo "abae0522480b9f37ff6cee4249e147e7cb78e1997cc6f76dba7e0fb8ec04221d  $custom_archive" | sha256sum --check
+          echo "ce2d60c4f33cdc1c09ab8e10316b76639da71c4af1ab1948f3547fc05b814796  $musl_archive" | sha256sum --check
+
+      - name: Prepare formula and source repositories
+        run: |
+          formula_repo="$RUNNER_TEMP/llarhub"
+          source_repo="$RUNNER_TEMP/glibc-source"
+          musl_source_repo="$RUNNER_TEMP/musl-source"
+          consumer_source_repo="$RUNNER_TEMP/pkgconfig-consumer-source"
+
+          mkdir -p "$formula_repo" "$source_repo" "$musl_source_repo" "$consumer_source_repo"
+          cp -R testdata/kodo-e2e/formulas/. "$formula_repo/"
+          cp -R testdata/crosscompile-e2e/formulas/. "$formula_repo/"
+          git -C "$formula_repo" init --initial-branch=main
+          git -C "$formula_repo" config user.email crosscompile-e2e@example.com
+          git -C "$formula_repo" config user.name "Cross Compile E2E"
+          git -C "$formula_repo" add .
+          git -C "$formula_repo" commit --quiet -m "Cross compile E2E formulas"
+
+          cp testdata/crosscompile-e2e/install-bootlin-sysroot "$source_repo/install-sysroot"
+          cp "$RUNNER_TEMP/aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2" "$source_repo/"
+          chmod +x "$source_repo/install-sysroot"
+          git -C "$source_repo" init --initial-branch=main
+          git -C "$source_repo" config user.email crosscompile-e2e@example.com
+          git -C "$source_repo" config user.name "Cross Compile E2E"
+          git -C "$source_repo" add .
+          git -C "$source_repo" commit --quiet -m "Add glibc 2.24 toolchain"
+          git -C "$source_repo" tag glibc-2.24
+
+          git -C "$source_repo" rm --quiet aarch64--glibc--stable-2017.05-toolchains-1-1.tar.bz2
+          cp "$RUNNER_TEMP/aarch64--glibc--stable-2018.11-1.tar.bz2" "$source_repo/"
+          git -C "$source_repo" add aarch64--glibc--stable-2018.11-1.tar.bz2
+          git -C "$source_repo" commit --quiet -m "Update toolchain to glibc 2.27"
+          git -C "$source_repo" tag glibc-2.27
+
+          cp testdata/crosscompile-e2e/install-bootlin-sysroot "$musl_source_repo/install-sysroot"
+          cp "$RUNNER_TEMP/aarch64--musl--stable-2018.11-1.tar.bz2" "$musl_source_repo/"
+          chmod +x "$musl_source_repo/install-sysroot"
+          git -C "$musl_source_repo" init --initial-branch=main
+          git -C "$musl_source_repo" config user.email crosscompile-e2e@example.com
+          git -C "$musl_source_repo" config user.name "Cross Compile E2E"
+          git -C "$musl_source_repo" add .
+          git -C "$musl_source_repo" commit --quiet -m "Add musl 1.1.19 toolchain"
+          git -C "$musl_source_repo" tag v1.1.19
+
+          cp testdata/crosscompile-e2e/pkgconfig-consumer/project.cmake "$consumer_source_repo/CMakeLists.txt"
+          cp testdata/crosscompile-e2e/consumer.c "$consumer_source_repo/main.c"
+          git -C "$consumer_source_repo" init --initial-branch=main
+          git -C "$consumer_source_repo" config user.email crosscompile-e2e@example.com
+          git -C "$consumer_source_repo" config user.name "Cross Compile E2E"
+          git -C "$consumer_source_repo" add .
+          git -C "$consumer_source_repo" commit --quiet -m "Add pkg-config dependency consumer"
+          git -C "$consumer_source_repo" tag v1.0.0
+
+          git config --global protocol.file.allow always
+          git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
+          git config --global url."file://$source_repo".insteadOf "https://github.com/bminor/glibc.git"
+          git config --global url."file://$musl_source_repo".insteadOf "https://github.com/ifduyue/musl.git"
+          git config --global url."file://$consumer_source_repo".insteadOf "https://github.com/llar/pkgconfig-consumer.git"
+
+      - name: Cross compile zlib with default sysroot
+        run: |
+          go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llar" ./cmd/llar
+          "$RUNNER_TEMP/llar" make madler/zlib@v1.3.1 \
+            --os linux \
+            --arch arm64 \
+            --output "$RUNNER_TEMP/zlib-linux-arm64" \
+            --verbose
+
+      - name: Cross compile zlib with Formula-managed glibc
+        run: |
+          custom_log="$RUNNER_TEMP/zlib-linux-arm64-custom-libc.log"
+          "$RUNNER_TEMP/llar" make madler/zlib@v1.3.1 \
+            --os linux \
+            --arch arm64 \
+            --require libc=glibc-2.27 \
+            --output "$RUNNER_TEMP/zlib-linux-arm64-custom-libc" \
+            --json \
+            --verbose \
+            > "$RUNNER_TEMP/zlib-linux-arm64-custom-libc.json" \
+            2> >(tee "$custom_log" >&2)
+          grep -F '"path":"bminor/glibc","version":"glibc-2.27"' \
+            "$RUNNER_TEMP/zlib-linux-arm64-custom-libc.json"
+          grep -E -- '--sysroot=[^ ]*/bminor/glibc@glibc-2\.27-' "$custom_log"
+          if grep -F -- 'bminor/glibc@glibc-2.24-' "$custom_log"; then
+            echo "custom libc build used the default glibc 2.24 sysroot" >&2
+            exit 1
+          fi
+
+      - name: Cross compile pkg-config dependency consumer
+        run: |
+          "$RUNNER_TEMP/llar" make llar/pkgconfig-consumer@v1.0.0 \
+            --os linux \
+            --arch arm64 \
+            --output "$RUNNER_TEMP/pkgconfig-consumer-linux-arm64" \
+            --verbose
+
+      - name: Cross compile libuv with Formula-managed musl
+        run: |
+          musl_log="$RUNNER_TEMP/libuv-linux-arm64-musl.log"
+          "$RUNNER_TEMP/llar" make libuv/libuv@v1.49.2 \
+            --os linux \
+            --arch arm64 \
+            --require libc=musl-1.1.19 \
+            --output "$RUNNER_TEMP/libuv-linux-arm64-musl" \
+            --json \
+            --verbose \
+            > "$RUNNER_TEMP/libuv-linux-arm64-musl.json" \
+            2> >(tee "$musl_log" >&2)
+          grep -F '"path":"ifduyue/musl","version":"v1.1.19"' \
+            "$RUNNER_TEMP/libuv-linux-arm64-musl.json"
+          grep -E -- '--sysroot=[^ ]*/ifduyue/musl@v1\.1\.19-' "$musl_log"
+          grep -F -- '--target=aarch64-linux-musl' "$musl_log"
+
+      - name: Upload default-sysroot zlib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zlib-linux-arm64
+          path: ${{ runner.temp }}/zlib-linux-arm64
+          if-no-files-found: error
+
+      - name: Upload custom-libc zlib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zlib-linux-arm64-custom-libc
+          path: ${{ runner.temp }}/zlib-linux-arm64-custom-libc
+          if-no-files-found: error
+
+      - name: Upload pkg-config consumer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkgconfig-consumer-linux-arm64
+          path: ${{ runner.temp }}/pkgconfig-consumer-linux-arm64
+          if-no-files-found: error
+
+      - name: Upload musl libuv artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libuv-linux-arm64-musl
+          path: ${{ runner.temp }}/libuv-linux-arm64-musl
+          if-no-files-found: error
+
+  run-linux-arm64:
+    name: "Run C libs: Linux arm64"
+    needs: build-linux-arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Install musl tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+
+      - name: Download default-sysroot zlib artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zlib-linux-arm64
+          path: ${{ runner.temp }}/zlib-linux-arm64
+
+      - name: Download custom-libc zlib artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zlib-linux-arm64-custom-libc
+          path: ${{ runner.temp }}/zlib-linux-arm64-custom-libc
+
+      - name: Download pkg-config consumer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pkgconfig-consumer-linux-arm64
+          path: ${{ runner.temp }}/pkgconfig-consumer-linux-arm64
+
+      - name: Download musl libuv artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: libuv-linux-arm64-musl
+          path: ${{ runner.temp }}/libuv-linux-arm64-musl
+
+      - name: Inspect, link, and run default-sysroot consumer
+        run: |
+          lib="$RUNNER_TEMP/zlib-linux-arm64/lib/libz.a"
+          member_dir="$RUNNER_TEMP/zlib-members"
+          consumer="$RUNNER_TEMP/zlib-consumer"
+
+          mkdir -p "$member_dir"
+          (
+            cd "$member_dir"
+            ar x "$lib" adler32.o
+          )
+          file "$member_dir/adler32.o" | tee "$RUNNER_TEMP/zlib-format.txt"
+          grep -F "ELF 64-bit LSB relocatable, ARM aarch64" "$RUNNER_TEMP/zlib-format.txt"
+
+          cc \
+            -I"$RUNNER_TEMP/zlib-linux-arm64/include" \
+            testdata/crosscompile-e2e/consumer.c \
+            "$lib" \
+            -o "$consumer"
+          ldd "$consumer" | tee "$RUNNER_TEMP/dynamic-libraries.txt"
+          grep -E "libc\\.so\\.6 => /" "$RUNNER_TEMP/dynamic-libraries.txt"
+          "$consumer"
+
+      - name: Inspect, link, and run custom-libc consumer
+        run: |
+          lib="$RUNNER_TEMP/zlib-linux-arm64-custom-libc/lib/libz.a"
+          member_dir="$RUNNER_TEMP/zlib-custom-libc-members"
+          consumer="$RUNNER_TEMP/zlib-custom-libc-consumer"
+
+          mkdir -p "$member_dir"
+          (
+            cd "$member_dir"
+            ar x "$lib" adler32.o
+          )
+          file "$member_dir/adler32.o" | tee "$RUNNER_TEMP/zlib-custom-libc-format.txt"
+          grep -F "ELF 64-bit LSB relocatable, ARM aarch64" "$RUNNER_TEMP/zlib-custom-libc-format.txt"
+
+          cc \
+            -I"$RUNNER_TEMP/zlib-linux-arm64-custom-libc/include" \
+            testdata/crosscompile-e2e/consumer.c \
+            "$lib" \
+            -o "$consumer"
+          ldd "$consumer" | tee "$RUNNER_TEMP/custom-libc-dynamic-libraries.txt"
+          grep -E "libc\\.so\\.6 => /" "$RUNNER_TEMP/custom-libc-dynamic-libraries.txt"
+          "$consumer"
+
+      - name: Inspect and run pkg-config dependency consumer
+        run: |
+          consumer="$RUNNER_TEMP/pkgconfig-consumer-linux-arm64/bin/llar-pkgconfig-consumer"
+
+          chmod +x "$consumer"
+          file "$consumer" | tee "$RUNNER_TEMP/pkgconfig-consumer-format.txt"
+          grep -E "ELF 64-bit LSB.*ARM aarch64" "$RUNNER_TEMP/pkgconfig-consumer-format.txt"
+          ldd "$consumer" | tee "$RUNNER_TEMP/pkgconfig-consumer-dynamic-libraries.txt"
+          grep -E "libc\\.so\\.6 => /" "$RUNNER_TEMP/pkgconfig-consumer-dynamic-libraries.txt"
+          "$consumer"
+
+      - name: Compare glibc and musl libuv ABIs
+        run: |
+          root="$RUNNER_TEMP/libuv-linux-arm64-musl"
+          lib="$root/lib/libuv.a"
+          glibc_consumer="$RUNNER_TEMP/libuv-glibc-consumer"
+          musl_consumer="$RUNNER_TEMP/libuv-musl-consumer"
+
+          cc \
+            -DEXPECT_ABI_MATCH=0 \
+            -I"$root/include" \
+            testdata/crosscompile-e2e/libuv-consumer.c \
+            "$lib" \
+            -pthread -ldl -lrt \
+            -o "$glibc_consumer"
+          "$glibc_consumer"
+
+          musl-gcc \
+            -DEXPECT_ABI_MATCH=1 \
+            -I"$root/include" \
+            testdata/crosscompile-e2e/libuv-consumer.c \
+            "$lib" \
+            -pthread -ldl -lrt \
+            -o "$musl_consumer"
+          readelf --program-headers "$musl_consumer" | tee "$RUNNER_TEMP/musl-program-headers.txt"
+          grep -F "/lib/ld-musl-aarch64.so.1" "$RUNNER_TEMP/musl-program-headers.txt"
+          "$musl_consumer"
+
+  build-darwin-arm64:
+    name: "Build zlib: Linux amd64 host to Darwin arm64 target"
+    runs-on: [qiniu, ubuntu-24.04]
+    timeout-minutes: 25
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Configure Go environment
+        run: |
+          echo "GOPATH=${RUNNER_TEMP}/go" >> "$GITHUB_ENV"
+          echo "GOBIN=${RUNNER_TEMP}/go/bin" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=${RUNNER_TEMP}/go/pkg/mod" >> "$GITHUB_ENV"
+          echo "GOCACHE=${RUNNER_TEMP}/go-build-cache" >> "$GITHUB_ENV"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.x
+
+      - name: Install LLVM
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-18 lld-18 llvm-18
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+
+      - name: Prepare macOS 14.5 SDK
+        run: |
+          archive="$RUNNER_TEMP/MacOSX14.5.sdk.tar.xz"
+          curl --fail --location --retry 3 \
+            "https://github.com/joseluisq/macosx-sdks/releases/download/14.5/MacOSX14.5.sdk.tar.xz" \
+            --output "$archive"
+          echo "6e146275d19f027faa2e8354da5e0267513abf013b8f16ad65a231653a2b1c5d  $archive" | sha256sum --check
+
+      - name: Prepare formula and source repositories
+        run: |
+          formula_repo="$RUNNER_TEMP/llarhub"
+          source_repo="$RUNNER_TEMP/macosx-sdks-source"
+
+          mkdir -p "$formula_repo" "$source_repo"
+          cp -R testdata/kodo-e2e/formulas/. "$formula_repo/"
+          cp -R testdata/crosscompile-e2e/formulas/. "$formula_repo/"
+          git -C "$formula_repo" init --initial-branch=main
+          git -C "$formula_repo" config user.email crosscompile-e2e@example.com
+          git -C "$formula_repo" config user.name "Cross Compile E2E"
+          git -C "$formula_repo" add .
+          git -C "$formula_repo" commit --quiet -m "Cross compile E2E formulas"
+
+          cp testdata/crosscompile-e2e/install-sysroot "$source_repo/"
+          cp "$RUNNER_TEMP/MacOSX14.5.sdk.tar.xz" "$source_repo/sysroot.tar.xz"
+          chmod +x "$source_repo/install-sysroot"
+          git -C "$source_repo" init --initial-branch=main
+          git -C "$source_repo" config user.email crosscompile-e2e@example.com
+          git -C "$source_repo" config user.name "Cross Compile E2E"
+          git -C "$source_repo" add .
+          git -C "$source_repo" commit --quiet -m "Add sysroot installer"
+          git -C "$source_repo" tag 14.5
+
+          git config --global protocol.file.allow always
+          git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
+          git config --global url."file://$source_repo".insteadOf "https://github.com/joseluisq/macosx-sdks.git"
+
+      - name: Cross compile zlib
+        run: |
+          go build -ldflags="-checklinkname=0" -o "$RUNNER_TEMP/llar" ./cmd/llar
+          "$RUNNER_TEMP/llar" make madler/zlib@v1.3.1 \
+            --os darwin \
+            --arch arm64 \
+            --output "$RUNNER_TEMP/zlib-darwin-arm64" \
+            --verbose
+
+      - name: Upload zlib artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zlib-darwin-arm64
+          path: ${{ runner.temp }}/zlib-darwin-arm64
+          if-no-files-found: error
+
+  run-darwin-arm64:
+    name: "Run zlib: macOS arm64 runner consumes Darwin arm64 artifact"
+    needs: build-darwin-arm64
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Download zlib artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: zlib-darwin-arm64
+          path: ${{ runner.temp }}/zlib-darwin-arm64
+
+      - name: Inspect, link, and run consumer
+        run: |
+          lib="$RUNNER_TEMP/zlib-darwin-arm64/lib/libz.a"
+          consumer="$RUNNER_TEMP/zlib-consumer"
+
+          lipo -info "$lib" | tee "$RUNNER_TEMP/zlib-format.txt"
+          grep -F "architecture: arm64" "$RUNNER_TEMP/zlib-format.txt"
+
+          cc \
+            -I"$RUNNER_TEMP/zlib-darwin-arm64/include" \
+            testdata/crosscompile-e2e/consumer.c \
+            "$lib" \
+            -o "$consumer"
+          otool -L "$consumer" | tee "$RUNNER_TEMP/dynamic-libraries.txt"
+          grep -F "/usr/lib/libSystem.B.dylib" "$RUNNER_TEMP/dynamic-libraries.txt"
+          "$consumer"

@@ -167,6 +167,23 @@ func TestRunMakeReturnsMatrixErrorBeforeStore(t *testing.T) {
 	}
 }
 
+func TestBuildModuleRejectsCrossTargetTest(t *testing.T) {
+	targetOS, targetArch := "linux", "amd64"
+	if runtime.GOOS == targetOS && runtime.GOARCH == targetArch {
+		targetArch = "arm64"
+	}
+	matrix := formula.Matrix{Require: map[string][]string{
+		"os":   {targetOS},
+		"arch": {targetArch},
+	}}
+
+	err := buildModule(context.Background(), nil, "owner/repo", "v1.0.0", matrix, true)
+	want := fmt.Sprintf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
+	if err == nil || err.Error() != want {
+		t.Fatalf("buildModule error = %v, want %q", err, want)
+	}
+}
+
 func TestNewRemoteStore(t *testing.T) {
 	isolatedWorkspaceDir(t)
 	store, err := newRemoteStore()

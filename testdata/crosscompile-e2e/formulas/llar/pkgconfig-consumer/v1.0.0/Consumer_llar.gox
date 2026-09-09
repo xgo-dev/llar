@@ -1,0 +1,18 @@
+id "llar/pkgconfig-consumer"
+
+fromVer "v1.0.0"
+
+onBuild ctx => {
+	installDir := ctx.outputDir
+
+	c := cmake.new(ctx.SourceDir, ctx.SourceDir+"/_build", installDir)
+	c.buildType "Release"
+	for _, dep := range ctx.Proj.Deps {
+		c.use ctx.outputDir(dep)
+	}
+	c.configure
+	c.build
+	c.install
+
+	ctx.setMetadata ""
+}

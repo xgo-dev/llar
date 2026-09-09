@@ -19,6 +19,7 @@ import (
 	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/build/cache"
+	"github.com/goplus/llar/internal/crosscompile"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/mod/module"
@@ -120,7 +121,8 @@ func (h *handler) do(ctx context.Context, req request, info io.Writer) (result, 
 }
 
 func (h *handler) build(ctx context.Context, req request, info io.Writer) (result, error) {
-	mods, err := modules.Load(ctx, module.Version{Path: req.module, Version: req.version}, modules.Options{
+	root := module.Version{Path: req.module, Version: req.version}
+	mods, err := modules.Load(ctx, root, modules.Options{
 		FormulaStore: h.formulaStore,
 		Matrix:       req.matrix,
 	})
@@ -128,14 +130,32 @@ func (h *handler) build(ctx context.Context, req request, info io.Writer) (resul
 		return result{}, err
 	}
 
-	builder, err := build.NewBuilder(build.Options{
+	buildOpts := build.Options{
 		Store:        h.formulaStore,
 		MatrixStr:    req.matrixStr,
 		Stdout:       info,
 		Stderr:       info,
 		WorkspaceDir: h.workspaceDir,
 		Cache:        h.cache,
+	}
+	target, err := crosscompile.Load(ctx, root, crosscompile.Config{
+		Store:        h.formulaStore,
+		Matrix:       req.matrix,
+		Stdout:       info,
+		Stderr:       info,
+		WorkspaceDir: h.workspaceDir,
+		Cache:        h.cache,
 	})
+	if err != nil {
+		return result{}, err
+	}
+	if target != nil {
+		if closer, ok := target.(io.Closer); ok {
+			defer closer.Close()
+		}
+		buildOpts.Target = target
+	}
+	builder, err := build.NewBuilder(buildOpts)
 	if err != nil {
 		return result{}, err
 	}
@@ -200,9 +220,9 @@ func parseRequest(r *http.Request) (request, error) {
 		if len(values) != 1 || values[0] == "" {
 			return request{}, fmt.Errorf("matrix %q requires exactly one value", key)
 		}
-		// Requests carry a flat matrix. Platform dimensions propagate to
+		// Requests carry a flat matrix. Target requirements propagate to
 		// dependencies; all other dimensions are package build options.
-		if key == "os" || key == "arch" {
+		if key == "os" || key == "arch" || key == "libc" {
 			if require == nil {
 				require = make(map[string][]string)
 			}
