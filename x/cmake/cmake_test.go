@@ -38,7 +38,7 @@ func TestUseSetsEnv(t *testing.T) {
 	}
 
 	for _, key := range []string{
-		"PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH", "CMAKE_INCLUDE_PATH",
+		"PKG_CONFIG_PATH", "CMAKE_PREFIX_PATH", "CMAKE_FIND_ROOT_PATH", "CMAKE_INCLUDE_PATH",
 		"CMAKE_LIBRARY_PATH", "INCLUDE", "LIB", "CPPFLAGS", "LDFLAGS",
 	} {
 		setenv(t, key, "")
@@ -48,10 +48,11 @@ func TestUseSetsEnv(t *testing.T) {
 	c.Use(root)
 
 	for key, want := range map[string]string{
-		"PKG_CONFIG_PATH":    pkgconfigDir,
-		"CMAKE_PREFIX_PATH":  root,
-		"CMAKE_INCLUDE_PATH": includeDir,
-		"CMAKE_LIBRARY_PATH": libDir,
+		"PKG_CONFIG_PATH":      pkgconfigDir,
+		"CMAKE_PREFIX_PATH":    root,
+		"CMAKE_FIND_ROOT_PATH": root,
+		"CMAKE_INCLUDE_PATH":   includeDir,
+		"CMAKE_LIBRARY_PATH":   libDir,
 	} {
 		if got := execbroker.Getenv(key); got != want {
 			t.Errorf("%s = %q, want %q", key, got, want)
@@ -96,6 +97,18 @@ func TestUsePartialDirs(t *testing.T) {
 	}
 }
 
+func TestUseMultipleRoots(t *testing.T) {
+	setenv(t, "CMAKE_FIND_ROOT_PATH", "")
+	c := New("", "", "")
+	c.Use("/deps/one")
+	c.Use("/deps/two")
+
+	sep := string(os.PathListSeparator)
+	if got, want := execbroker.Getenv("CMAKE_FIND_ROOT_PATH"), "/deps/two"+sep+"/deps/one"; got != want {
+		t.Fatalf("CMAKE_FIND_ROOT_PATH = %q, want %q", got, want)
+	}
+}
+
 func TestOutputDir(t *testing.T) {
 	if got := New("", "build", "").OutputDir(); got != "build" {
 		t.Errorf("OutputDir = %q, want %q", got, "build")
@@ -127,6 +140,25 @@ func TestDefinesArgs(t *testing.T) {
 	// Verify sorted order
 	if args[0] != "-DDISABLE:BOOL=OFF" || args[1] != "-DENABLE:BOOL=ON" || args[2] != "-DFOO:STRING=BAR" {
 		t.Errorf("definesArgs not sorted: %v", args)
+	}
+}
+
+func TestSysroot(t *testing.T) {
+	c := New("", "", "")
+	c.Sysroot("/sdk")
+
+	joined := strings.Join(c.definesArgs(), " ")
+	for _, want := range []string{
+		"-DCMAKE_SYSROOT:STRING=/sdk",
+		"-DCMAKE_OSX_SYSROOT:STRING=/sdk",
+		"-DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM:STRING=NEVER",
+		"-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY:STRING=ONLY",
+		"-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE:STRING=ONLY",
+		"-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE:STRING=ONLY",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("definesArgs missing %q, got %q", want, joined)
+		}
 	}
 }
 

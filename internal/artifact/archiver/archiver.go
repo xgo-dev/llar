@@ -22,7 +22,7 @@ func Pack(srcDir, dst string, metainfo json.RawMessage) error {
 
 // PackFS writes src as an LLAR binary artifact at dst.
 // The metainfo bytes are written verbatim to .llar/metadata.json.
-// TODO: Copy symlink targets as regular files instead of rejecting link entries.
+// Symlinks are followed: their target files are stored under the link's name.
 func PackFS(src fs.FS, dst string, metainfo json.RawMessage) error {
 	if !json.Valid(metainfo) {
 		return fmt.Errorf("invalid artifact metainfo JSON")
@@ -76,22 +76,7 @@ func packZip(w *zip.Writer, src fs.FS) error {
 		return file.Close()
 	}
 
-	return fs.WalkDir(src, ".", func(name string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if name == "." || entry.IsDir() {
-			return nil
-		}
-		if name == metadataPath {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		return add(name, info)
-	})
+	return walkFiles(src, add)
 }
 
 func writeZipMetadata(w *zip.Writer, metainfo json.RawMessage) error {
@@ -148,7 +133,12 @@ func packTar(tw *tar.Writer, src fs.FS) error {
 		return file.Close()
 	}
 
-	return fs.WalkDir(src, ".", func(name string, entry fs.DirEntry, err error) error {
+	return walkFiles(src, add)
+}
+
+func walkFiles(src fs.FS, add func(string, fs.FileInfo) error) error {
+	var walk fs.WalkDirFunc
+	walk = func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -162,8 +152,19 @@ func packTar(tw *tar.Writer, src fs.FS) error {
 		if err != nil {
 			return err
 		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			info, err = fs.Stat(src, name)
+			if err != nil {
+				return err
+			}
+			if info.IsDir() {
+				// WalkDir does not follow directory links such as lib64 -> lib.
+				return fs.WalkDir(src, name, walk)
+			}
+		}
 		return add(name, info)
-	})
+	}
+	return fs.WalkDir(src, ".", walk)
 }
 
 func writeTarMetadata(tw *tar.Writer, metainfo json.RawMessage) error {

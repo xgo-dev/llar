@@ -132,6 +132,38 @@ func TestUsePartialDirs(t *testing.T) {
 	}
 }
 
+func TestSysroot(t *testing.T) {
+	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
+		setenv(t, key, "-existing")
+	}
+	for _, key := range []string{"PKG_CONFIG_SYSROOT_DIR", "PKG_CONFIG_LIBDIR"} {
+		value, ok := execbroker.LookupEnv(key)
+		if err := execbroker.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if ok {
+				_ = execbroker.Setenv(key, value)
+			} else {
+				_ = execbroker.Unsetenv(key)
+			}
+		})
+	}
+	a := New("", "", "")
+	a.Sysroot("/sdk")
+
+	for _, key := range []string{"CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"} {
+		if got, want := execbroker.Getenv(key), "-existing --sysroot=/sdk -isysroot/sdk"; got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	for _, key := range []string{"PKG_CONFIG_SYSROOT_DIR", "PKG_CONFIG_LIBDIR"} {
+		if got, ok := execbroker.LookupEnv(key); ok {
+			t.Errorf("%s = %q, want unset", key, got)
+		}
+	}
+}
+
 func TestSource(t *testing.T) {
 	a := New("original", "", "")
 	a.Source("/new/src")

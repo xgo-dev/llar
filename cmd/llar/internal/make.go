@@ -12,6 +12,7 @@ import (
 
 	"github.com/goplus/llar/formula"
 	"github.com/goplus/llar/internal/build"
+	"github.com/goplus/llar/internal/crosscompile"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/modules/modlocal"
@@ -129,10 +130,23 @@ func hostMatrix() formula.Matrix {
 // hooks triggered — each dependency is verified by its own
 // `llar test <dep>` invocation.
 func buildModule(ctx context.Context, store repo.Store, modPath, version string, matrix formula.Matrix, runTest bool) error {
-	mods, err := modules.Load(ctx, module.Version{Path: modPath, Version: version}, modules.Options{
+	root := module.Version{Path: modPath, Version: version}
+	var targetOS, targetArch string
+	if values := matrix.Require["os"]; len(values) > 0 {
+		targetOS = values[0]
+	}
+	if values := matrix.Require["arch"]; len(values) > 0 {
+		targetArch = values[0]
+	}
+	crossCompile := targetOS != runtime.GOOS || targetArch != runtime.GOARCH
+	if runTest && crossCompile {
+		return fmt.Errorf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
+	}
+	loadOpts := modules.Options{
 		FormulaStore: store,
 		Matrix:       matrix,
-	})
+	}
+	mods, err := modules.Load(ctx, root, loadOpts)
 	if err != nil {
 		return fmt.Errorf("failed to load modules: %w", err)
 	}
@@ -158,7 +172,23 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		defer os.RemoveAll(tmpDir)
 		buildOpts.WorkspaceDir = tmpDir
 	}
-
+	target, err := crosscompile.Load(ctx, root, crosscompile.Config{
+		Store:        store,
+		Matrix:       matrix,
+		Stdout:       buildOpts.Stdout,
+		Stderr:       buildOpts.Stderr,
+		WorkspaceDir: buildOpts.WorkspaceDir,
+		Cache:        buildOpts.Cache,
+	})
+	if err != nil {
+		return err
+	}
+	if target != nil {
+		if closer, ok := target.(io.Closer); ok {
+			defer closer.Close()
+		}
+		buildOpts.Target = target
+	}
 	builder, err := build.NewBuilder(buildOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create builder: %w", err)

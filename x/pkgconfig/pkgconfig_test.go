@@ -51,6 +51,22 @@ func TestUseIgnoresMissingDirectory(t *testing.T) {
 	}
 }
 
+func TestUseIgnoresSetenvError(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "lib", "pkgconfig")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := execbroker.Do(execbroker.Scope{Env: []string{"PKG_CONFIG_PATH=\x00"}}, func() error {
+		Use(root)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestQueries(t *testing.T) {
 	tests := []struct {
 		name  string
