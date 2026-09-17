@@ -1,0 +1,14 @@
+import "os"
+
+id "llar/sentry-formula-probe"
+
+fromVer "1.0.0"
+
+onBuild ctx => {
+	data, err := os.readFile("/etc/hosts")
+	if err != nil {
+		ctx.Errs.Add(err)
+		return
+	}
+	ctx.setMetadata string(data)
+}
