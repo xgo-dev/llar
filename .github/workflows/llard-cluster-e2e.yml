@@ -84,6 +84,10 @@ jobs:
           git -C "$formula_repo" add .
           git -C "$formula_repo" commit -m "LLARD E2E formulas"
 
+          # The real llarhub partial clone may need blobs absent from the fixture
+          # repository, such as zlib's formula. Keep workspaces, but start a fresh clone.
+          mv "$RUNNER_TEMP/llard-cache/.llar/formulas" "$RUNNER_TEMP/llar-make-formulas"
+
           git config --global protocol.file.allow always
           git config --global url."file://$formula_repo".insteadOf "https://github.com/goplus/llarhub.git"
 
