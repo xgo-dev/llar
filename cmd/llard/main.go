@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"syscall"
 
 	"github.com/goplus/llar/internal/artifact"
+	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/build/cache"
 	buildhttp "github.com/goplus/llar/internal/build/http"
 	"github.com/goplus/llar/internal/formula/repo"
@@ -73,15 +75,21 @@ func run() error {
 		Bucket:    cfg.bucket,
 		Prefix:    cfg.prefix,
 	})
-	buildCache := cache.NewKodo(cache.KodoConfig{
-		AccessKey:    cfg.accessKey,
-		SecretKey:    cfg.secretKey,
-		Bucket:       cfg.bucket,
-		PublicDomain: cfg.publicDomain,
-		Prefix:       cfg.prefix,
-		WorkspaceDir: workspaceDir,
-		Artifacts:    artifacts,
-	})
+	// Reuse artifacts already present in the workspace before downloading them
+	// from Kodo. The workspace is evictable, so Kodo remains the source of
+	// truth and restores anything missing back into the workspace.
+	buildCache := readThroughCache{
+		local: build.NewLocalCache(workspaceDir),
+		remote: cache.NewKodo(cache.KodoConfig{
+			AccessKey:    cfg.accessKey,
+			SecretKey:    cfg.secretKey,
+			Bucket:       cfg.bucket,
+			PublicDomain: cfg.publicDomain,
+			Prefix:       cfg.prefix,
+			WorkspaceDir: workspaceDir,
+			Artifacts:    artifacts,
+		}),
+	}
 	handler := buildhttp.New(buildhttp.Options{
 		FormulaStore: formulaStore,
 		Cache:        buildCache,
@@ -108,6 +116,41 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// readThroughCache reuses artifacts already present in the local workspace
+// before fetching them from the remote store. The local workspace is only a
+// best-effort cache: an installed artifact directory may be removed by a
+// cleanup pass, so a local miss falls back to the remote store and a remote
+// hit is persisted back into the local cache for later reads.
+//
+// This is a deliberate copy of the llar client's read-through cache: llard and
+// the client evolve separately and must not share an abstraction.
+type readThroughCache struct {
+	local  cache.Cache
+	remote cache.Cache
+}
+
+func (c readThroughCache) Get(ctx context.Context, key cache.Key) (cache.Entry, bool, error) {
+	entry, ok, err := c.local.Get(ctx, key)
+	if err != nil || ok {
+		return entry, ok, err
+	}
+	entry, ok, err = c.remote.Get(ctx, key)
+	if err != nil || !ok {
+		return entry, ok, err
+	}
+	// The remote store already restored the artifact into the shared
+	// workspace, so the local cache only needs to persist its entry.
+	entry, err = c.local.Put(ctx, key, nil, entry)
+	if err != nil {
+		return cache.Entry{}, false, err
+	}
+	return entry, true, nil
+}
+
+func (c readThroughCache) Put(ctx context.Context, key cache.Key, output fs.FS, entry cache.Entry) (cache.Entry, error) {
+	return c.local.Put(ctx, key, output, entry)
 }
 
 func loadConfig() (config, error) {

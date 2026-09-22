@@ -5,9 +5,15 @@
 package main
 
 import (
+	"context"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/goplus/llar/internal/build"
+	"github.com/goplus/llar/internal/build/cache"
+	"github.com/goplus/llar/mod/module"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -97,6 +103,75 @@ func TestRunRequiresConfig(t *testing.T) {
 	if err := run(); err == nil || err.Error() != "LLARD_KODO_ACCESS_KEY is required" {
 		t.Fatalf("run error = %v", err)
 	}
+}
+
+func TestReadThroughCache_LocalHitSkipsRemote(t *testing.T) {
+	workspaceDir := t.TempDir()
+	local := build.NewLocalCache(workspaceDir)
+	key := cache.Key{Module: module.Version{Path: "madler/zlib", Version: "v1.3.1"}, Matrix: "amd64-linux"}
+	if _, err := local.Put(context.Background(), key, nil, cache.Entry{Metadata: "-local"}); err != nil {
+		t.Fatal(err)
+	}
+
+	remote := &countingCache{}
+	c := readThroughCache{local: local, remote: remote}
+	entry, ok, err := c.Get(context.Background(), key)
+	if err != nil || !ok || entry.Metadata != "-local" {
+		t.Fatalf("Get() = %+v, %v, %v; want local hit", entry, ok, err)
+	}
+	if remote.gets != 0 {
+		t.Fatalf("remote Get calls = %d, want 0", remote.gets)
+	}
+}
+
+func TestReadThroughCache_PersistsRemoteHit(t *testing.T) {
+	workspaceDir := t.TempDir()
+	local := build.NewLocalCache(workspaceDir)
+	key := cache.Key{Module: module.Version{Path: "madler/zlib", Version: "v1.3.1"}, Matrix: "amd64-linux"}
+	remote := &countingCache{entry: cache.Entry{Metadata: "-remote"}, hit: true}
+
+	c := readThroughCache{local: local, remote: remote}
+	for i := 0; i < 2; i++ {
+		entry, ok, err := c.Get(context.Background(), key)
+		if err != nil || !ok || entry.Metadata != "-remote" {
+			t.Fatalf("Get() #%d = %+v, %v, %v", i+1, entry, ok, err)
+		}
+	}
+	if remote.gets != 1 {
+		t.Fatalf("remote Get calls = %d, want 1", remote.gets)
+	}
+}
+
+func TestReadThroughCache_PutWritesOnlyLocal(t *testing.T) {
+	local := build.NewLocalCache(t.TempDir())
+	remote := &countingCache{}
+	c := readThroughCache{local: local, remote: remote}
+	key := cache.Key{Module: module.Version{Path: "madler/zlib", Version: "v1.3.1"}, Matrix: "amd64-linux"}
+
+	if _, err := c.Put(context.Background(), key, nil, cache.Entry{Metadata: "-built"}); err != nil {
+		t.Fatalf("Put() failed: %v", err)
+	}
+	if remote.puts != 0 {
+		t.Fatalf("remote Put calls = %d, want 0", remote.puts)
+	}
+}
+
+type countingCache struct {
+	gets  int
+	puts  int
+	entry cache.Entry
+	hit   bool
+	err   error
+}
+
+func (c *countingCache) Get(context.Context, cache.Key) (cache.Entry, bool, error) {
+	c.gets++
+	return c.entry, c.hit, c.err
+}
+
+func (c *countingCache) Put(context.Context, cache.Key, fs.FS, cache.Entry) (cache.Entry, error) {
+	c.puts++
+	return cache.Entry{}, nil
 }
 
 func TestRunRejectsInvalidAddress(t *testing.T) {
