@@ -22,6 +22,7 @@ import (
 	buildhttp "github.com/goplus/llar/internal/build/http"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/mod/module"
 	"github.com/joho/godotenv"
 )
 
@@ -79,8 +80,9 @@ func run() error {
 	// from Kodo. The workspace is evictable, so Kodo remains the source of
 	// truth and restores anything missing back into the workspace.
 	buildCache := readThroughCache{
-		local:     build.NewLocalCache(workspaceDir),
-		artifacts: artifacts,
+		local:        build.NewLocalCache(workspaceDir),
+		artifacts:    artifacts,
+		workspaceDir: workspaceDir,
 		remote: cache.NewKodo(cache.KodoConfig{
 			AccessKey:    cfg.accessKey,
 			SecretKey:    cfg.secretKey,
@@ -131,9 +133,10 @@ func run() error {
 // gating local hits on the remote artifact record, which the client does not
 // need because it never deletes published artifacts.
 type readThroughCache struct {
-	local     cache.Cache
-	remote    cache.Cache
-	artifacts artifact.Store
+	local        cache.Cache
+	remote       cache.Cache
+	artifacts    artifact.Store
+	workspaceDir string
 }
 
 func (c readThroughCache) Get(ctx context.Context, key cache.Key) (cache.Entry, bool, error) {
@@ -146,6 +149,11 @@ func (c readThroughCache) Get(ctx context.Context, key cache.Key) (cache.Entry, 
 		MatrixStr: key.Matrix,
 	}); err != nil {
 		if errors.Is(err, artifact.ErrNotFound) {
+			// The artifact was deleted remotely: drop the local install tree
+			// so the rebuild cannot mix stale files with the new build.
+			if err := c.removeInstallDir(key); err != nil {
+				return cache.Entry{}, false, err
+			}
 			return cache.Entry{}, false, nil
 		}
 		return cache.Entry{}, false, err
@@ -179,6 +187,20 @@ func (c readThroughCache) Put(ctx context.Context, key cache.Key, output fs.FS, 
 	// a future restore, so it must not fail the build.
 	_, _ = c.local.Put(ctx, key, output, stored)
 	return stored, nil
+}
+
+// removeInstallDir drops the workspace install tree for key. The remote artifact
+// record is gone, so the local copy is stale and a rebuild must start clean.
+func (c readThroughCache) removeInstallDir(key cache.Key) error {
+	if c.workspaceDir == "" {
+		return nil
+	}
+	escaped, err := module.EscapePath(key.Module.Path)
+	if err != nil {
+		return err
+	}
+	installDir := filepath.Join(c.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, key.Module.Version, key.Matrix))
+	return os.RemoveAll(installDir)
 }
 
 func loadConfig() (config, error) {

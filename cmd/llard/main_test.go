@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -146,8 +147,9 @@ func TestReadThroughCache_PersistsRemoteHit(t *testing.T) {
 }
 
 // TestReadThroughCache_RecordMissingInvalidatesLocal verifies that deleting the
-// authoritative artifact record invalidates a local entry: the next Get must
-// miss (so the build runs again) and must not even consult the remote store.
+// authoritative artifact record invalidates a local entry: the next Get drops
+// the install tree, misses (so the build runs again), and does not consult the
+// remote store.
 func TestReadThroughCache_RecordMissingInvalidatesLocal(t *testing.T) {
 	workspaceDir := t.TempDir()
 	local := build.NewLocalCache(workspaceDir)
@@ -155,14 +157,21 @@ func TestReadThroughCache_RecordMissingInvalidatesLocal(t *testing.T) {
 	if _, err := local.Put(context.Background(), key, nil, cache.Entry{Metadata: "-local"}); err != nil {
 		t.Fatal(err)
 	}
+	installDir := filepath.Join(workspaceDir, "madler", "zlib@v1.3.1-amd64-linux")
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	remote := &countingCache{entry: cache.Entry{Metadata: "-remote"}, hit: true}
-	c := readThroughCache{local: local, remote: remote, artifacts: &fakeArtifacts{}}
+	c := readThroughCache{local: local, remote: remote, artifacts: &fakeArtifacts{}, workspaceDir: workspaceDir}
 	if _, ok, err := c.Get(context.Background(), key); err != nil || ok {
 		t.Fatalf("Get() = %v, %v; want miss after record deletion", ok, err)
 	}
 	if remote.gets != 0 {
 		t.Fatalf("remote Get calls = %d, want 0", remote.gets)
+	}
+	if _, err := os.Stat(installDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("install dir still present after record deletion: %v", err)
 	}
 }
 
