@@ -79,7 +79,8 @@ func run() error {
 	// from Kodo. The workspace is evictable, so Kodo remains the source of
 	// truth and restores anything missing back into the workspace.
 	buildCache := readThroughCache{
-		local: build.NewLocalCache(workspaceDir),
+		local:     build.NewLocalCache(workspaceDir),
+		artifacts: artifacts,
 		remote: cache.NewKodo(cache.KodoConfig{
 			AccessKey:    cfg.accessKey,
 			SecretKey:    cfg.secretKey,
@@ -120,18 +121,35 @@ func run() error {
 
 // readThroughCache reuses artifacts already present in the local workspace
 // before fetching them from the remote store. The local workspace is only a
-// best-effort cache: an installed artifact directory may be removed by a
-// cleanup pass, so a local miss falls back to the remote store and a remote
-// hit is persisted back into the local cache for later reads.
+// best-effort cache: the remote artifact record is the source of truth, so a
+// deleted record invalidates any local copy, a local miss falls back to the
+// remote store, and a remote hit is persisted back into the local cache for
+// later reads.
 //
 // This is a deliberate copy of the llar client's read-through cache: llard and
-// the client evolve separately and must not share an abstraction.
+// the client evolve separately and must not share an abstraction. It differs by
+// gating local hits on the remote artifact record, which the client does not
+// need because it never deletes published artifacts.
 type readThroughCache struct {
-	local  cache.Cache
-	remote cache.Cache
+	local     cache.Cache
+	remote    cache.Cache
+	artifacts artifact.Store
 }
 
 func (c readThroughCache) Get(ctx context.Context, key cache.Key) (cache.Entry, bool, error) {
+	// The remote artifact record is the source of truth: when it is deleted,
+	// any local copy is stale and must not be used. This is a metadata-only
+	// lookup, so a local hit still avoids the artifact download.
+	if _, err := c.artifacts.Get(ctx, artifact.Key{
+		Module:    key.Module.Path,
+		Version:   key.Module.Version,
+		MatrixStr: key.Matrix,
+	}); err != nil {
+		if errors.Is(err, artifact.ErrNotFound) {
+			return cache.Entry{}, false, nil
+		}
+		return cache.Entry{}, false, err
+	}
 	entry, ok, err := c.local.Get(ctx, key)
 	if err != nil || ok {
 		return entry, ok, err

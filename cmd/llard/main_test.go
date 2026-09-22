@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goplus/llar/internal/artifact"
 	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/build/cache"
 	"github.com/goplus/llar/mod/module"
@@ -116,7 +117,7 @@ func TestReadThroughCache_LocalHitSkipsRemote(t *testing.T) {
 	}
 
 	remote := &countingCache{}
-	c := readThroughCache{local: local, remote: remote}
+	c := readThroughCache{local: local, remote: remote, artifacts: presentArtifacts(key)}
 	entry, ok, err := c.Get(context.Background(), key)
 	if err != nil || !ok || entry.Metadata != "-local" {
 		t.Fatalf("Get() = %+v, %v, %v; want local hit", entry, ok, err)
@@ -132,7 +133,7 @@ func TestReadThroughCache_PersistsRemoteHit(t *testing.T) {
 	key := cache.Key{Module: module.Version{Path: "madler/zlib", Version: "v1.3.1"}, Matrix: "amd64-linux"}
 	remote := &countingCache{entry: cache.Entry{Metadata: "-remote"}, hit: true}
 
-	c := readThroughCache{local: local, remote: remote}
+	c := readThroughCache{local: local, remote: remote, artifacts: presentArtifacts(key)}
 	for i := 0; i < 2; i++ {
 		entry, ok, err := c.Get(context.Background(), key)
 		if err != nil || !ok || entry.Metadata != "-remote" {
@@ -141,6 +142,27 @@ func TestReadThroughCache_PersistsRemoteHit(t *testing.T) {
 	}
 	if remote.gets != 1 {
 		t.Fatalf("remote Get calls = %d, want 1", remote.gets)
+	}
+}
+
+// TestReadThroughCache_RecordMissingInvalidatesLocal verifies that deleting the
+// authoritative artifact record invalidates a local entry: the next Get must
+// miss (so the build runs again) and must not even consult the remote store.
+func TestReadThroughCache_RecordMissingInvalidatesLocal(t *testing.T) {
+	workspaceDir := t.TempDir()
+	local := build.NewLocalCache(workspaceDir)
+	key := cache.Key{Module: module.Version{Path: "madler/zlib", Version: "v1.3.1"}, Matrix: "amd64-linux"}
+	if _, err := local.Put(context.Background(), key, nil, cache.Entry{Metadata: "-local"}); err != nil {
+		t.Fatal(err)
+	}
+
+	remote := &countingCache{entry: cache.Entry{Metadata: "-remote"}, hit: true}
+	c := readThroughCache{local: local, remote: remote, artifacts: &fakeArtifacts{}}
+	if _, ok, err := c.Get(context.Background(), key); err != nil || ok {
+		t.Fatalf("Get() = %v, %v; want miss after record deletion", ok, err)
+	}
+	if remote.gets != 0 {
+		t.Fatalf("remote Get calls = %d, want 0", remote.gets)
 	}
 }
 
@@ -214,6 +236,36 @@ func (c *countingCache) Put(context.Context, cache.Key, fs.FS, cache.Entry) (cac
 	c.puts++
 	return cache.Entry{}, nil
 }
+
+func artifactRecordKey(key cache.Key) string {
+	return key.Module.Path + "@" + key.Module.Version + "?" + key.Matrix
+}
+
+// presentArtifacts returns an artifact store holding the record for key.
+func presentArtifacts(key cache.Key) *fakeArtifacts {
+	return &fakeArtifacts{record: map[string]artifact.Artifact{artifactRecordKey(key): {}}}
+}
+
+type fakeArtifacts struct {
+	record map[string]artifact.Artifact
+	err    error
+}
+
+func (f *fakeArtifacts) Get(_ context.Context, key artifact.Key) (artifact.Artifact, error) {
+	if f.err != nil {
+		return artifact.Artifact{}, f.err
+	}
+	if a, ok := f.record[key.Module+"@"+key.Version+"?"+key.MatrixStr]; ok {
+		return a, nil
+	}
+	return artifact.Artifact{}, artifact.ErrNotFound
+}
+
+func (f *fakeArtifacts) Put(context.Context, artifact.Key, artifact.Artifact) (artifact.Artifact, error) {
+	return artifact.Artifact{}, nil
+}
+
+func (f *fakeArtifacts) Delete(context.Context, artifact.Key) error { return nil }
 
 func TestRunRejectsInvalidAddress(t *testing.T) {
 	t.Chdir(t.TempDir())
