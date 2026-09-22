@@ -6,8 +6,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -142,18 +144,57 @@ func TestReadThroughCache_PersistsRemoteHit(t *testing.T) {
 	}
 }
 
-func TestReadThroughCache_PutWritesOnlyLocal(t *testing.T) {
-	local := build.NewLocalCache(t.TempDir())
-	remote := &countingCache{}
-	c := readThroughCache{local: local, remote: remote}
+// TestReadThroughCache_PutOrdersRemoteThenLocal pins the write order: the
+// artifact is published remotely before the local entry is written.
+func TestReadThroughCache_PutOrdersRemoteThenLocal(t *testing.T) {
+	var order []string
+	c := readThroughCache{
+		local:  &orderCache{name: "local", order: &order},
+		remote: &orderCache{name: "remote", order: &order},
+	}
 	key := cache.Key{Module: module.Version{Path: "madler/zlib", Version: "v1.3.1"}, Matrix: "amd64-linux"}
 
 	if _, err := c.Put(context.Background(), key, nil, cache.Entry{Metadata: "-built"}); err != nil {
 		t.Fatalf("Put() failed: %v", err)
 	}
-	if remote.puts != 0 {
-		t.Fatalf("remote Put calls = %d, want 0", remote.puts)
+	if !reflect.DeepEqual(order, []string{"remote", "local"}) {
+		t.Fatalf("Put order = %v, want [remote local]", order)
 	}
+}
+
+// TestReadThroughCache_PutSkipsLocalWhenRemoteFails verifies that a remote
+// publish failure does not leave a divergent local entry behind: the next Get
+// must restore the canonical artifact from the remote store.
+func TestReadThroughCache_PutSkipsLocalWhenRemoteFails(t *testing.T) {
+	var order []string
+	remoteErr := errors.New("remote put failed")
+	c := readThroughCache{
+		local:  &orderCache{name: "local", order: &order},
+		remote: &orderCache{name: "remote", order: &order, err: remoteErr},
+	}
+	key := cache.Key{Module: module.Version{Path: "madler/zlib", Version: "v1.3.1"}, Matrix: "amd64-linux"}
+
+	if _, err := c.Put(context.Background(), key, nil, cache.Entry{Metadata: "-built"}); !errors.Is(err, remoteErr) {
+		t.Fatalf("Put() error = %v, want %v", err, remoteErr)
+	}
+	if len(order) != 1 || order[0] != "remote" {
+		t.Fatalf("Put order = %v, want [remote] only", order)
+	}
+}
+
+type orderCache struct {
+	name  string
+	order *[]string
+	err   error
+}
+
+func (c *orderCache) Get(context.Context, cache.Key) (cache.Entry, bool, error) {
+	return cache.Entry{}, false, nil
+}
+
+func (c *orderCache) Put(context.Context, cache.Key, fs.FS, cache.Entry) (cache.Entry, error) {
+	*c.order = append(*c.order, c.name)
+	return cache.Entry{}, c.err
 }
 
 type countingCache struct {

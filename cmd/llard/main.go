@@ -150,7 +150,17 @@ func (c readThroughCache) Get(ctx context.Context, key cache.Key) (cache.Entry, 
 }
 
 func (c readThroughCache) Put(ctx context.Context, key cache.Key, output fs.FS, entry cache.Entry) (cache.Entry, error) {
-	return c.local.Put(ctx, key, output, entry)
+	// Publishing is authoritative: upload and record the artifact remotely
+	// first. When another llard already published it, this fails and the local
+	// copy must not be cached; the next Get restores the canonical artifact.
+	stored, err := c.remote.Put(ctx, key, output, entry)
+	if err != nil {
+		return cache.Entry{}, err
+	}
+	// Cache the authoritative entry locally. A local write failure only costs
+	// a future restore, so it must not fail the build.
+	_, _ = c.local.Put(ctx, key, output, stored)
+	return stored, nil
 }
 
 func loadConfig() (config, error) {
