@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -16,10 +17,12 @@ import (
 	"syscall"
 
 	"github.com/goplus/llar/internal/artifact"
+	"github.com/goplus/llar/internal/build"
 	"github.com/goplus/llar/internal/build/cache"
 	buildhttp "github.com/goplus/llar/internal/build/http"
 	"github.com/goplus/llar/internal/formula/repo"
 	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/mod/module"
 	"github.com/joho/godotenv"
 )
 
@@ -73,15 +76,23 @@ func run() error {
 		Bucket:    cfg.bucket,
 		Prefix:    cfg.prefix,
 	})
-	buildCache := cache.NewKodo(cache.KodoConfig{
-		AccessKey:    cfg.accessKey,
-		SecretKey:    cfg.secretKey,
-		Bucket:       cfg.bucket,
-		PublicDomain: cfg.publicDomain,
-		Prefix:       cfg.prefix,
-		WorkspaceDir: workspaceDir,
-		Artifacts:    artifacts,
-	})
+	// Reuse artifacts already present in the workspace before downloading them
+	// from Kodo. The workspace is evictable, so Kodo remains the source of
+	// truth and restores anything missing back into the workspace.
+	buildCache := readThroughCache{
+		local:        build.NewLocalCache(workspaceDir),
+		artifacts:    artifacts,
+		workspaceDir: workspaceDir,
+		remote: cache.NewKodo(cache.KodoConfig{
+			AccessKey:    cfg.accessKey,
+			SecretKey:    cfg.secretKey,
+			Bucket:       cfg.bucket,
+			PublicDomain: cfg.publicDomain,
+			Prefix:       cfg.prefix,
+			WorkspaceDir: workspaceDir,
+			Artifacts:    artifacts,
+		}),
+	}
 	handler := buildhttp.New(buildhttp.Options{
 		FormulaStore: formulaStore,
 		Cache:        buildCache,
@@ -108,6 +119,88 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// readThroughCache reuses artifacts already present in the local workspace
+// before fetching them from the remote store. The local workspace is only a
+// best-effort cache: the remote artifact record is the source of truth, so a
+// deleted record invalidates any local copy, a local miss falls back to the
+// remote store, and a remote hit is persisted back into the local cache for
+// later reads.
+//
+// This is a deliberate copy of the llar client's read-through cache: llard and
+// the client evolve separately and must not share an abstraction. It differs by
+// gating local hits on the remote artifact record, which the client does not
+// need because it never deletes published artifacts.
+type readThroughCache struct {
+	local        cache.Cache
+	remote       cache.Cache
+	artifacts    artifact.Store
+	workspaceDir string
+}
+
+func (c readThroughCache) Get(ctx context.Context, key cache.Key) (cache.Entry, bool, error) {
+	// The remote artifact record is the source of truth: when it is deleted,
+	// any local copy is stale and must not be used. This is a metadata-only
+	// lookup, so a local hit still avoids the artifact download.
+	if _, err := c.artifacts.Get(ctx, artifact.Key{
+		Module:    key.Module.Path,
+		Version:   key.Module.Version,
+		MatrixStr: key.Matrix,
+	}); err != nil {
+		if errors.Is(err, artifact.ErrNotFound) {
+			// The artifact was deleted remotely: drop the local install tree
+			// so the rebuild cannot mix stale files with the new build.
+			if err := c.removeInstallDir(key); err != nil {
+				return cache.Entry{}, false, err
+			}
+			return cache.Entry{}, false, nil
+		}
+		return cache.Entry{}, false, err
+	}
+	entry, ok, err := c.local.Get(ctx, key)
+	if err != nil || ok {
+		return entry, ok, err
+	}
+	entry, ok, err = c.remote.Get(ctx, key)
+	if err != nil || !ok {
+		return entry, ok, err
+	}
+	// The remote store already restored the artifact into the shared
+	// workspace, so the local cache only needs to persist its entry.
+	entry, err = c.local.Put(ctx, key, nil, entry)
+	if err != nil {
+		return cache.Entry{}, false, err
+	}
+	return entry, true, nil
+}
+
+func (c readThroughCache) Put(ctx context.Context, key cache.Key, output fs.FS, entry cache.Entry) (cache.Entry, error) {
+	// Publishing is authoritative: upload and record the artifact remotely
+	// first. When another llard already published it, this fails and the local
+	// copy must not be cached; the next Get restores the canonical artifact.
+	stored, err := c.remote.Put(ctx, key, output, entry)
+	if err != nil {
+		return cache.Entry{}, err
+	}
+	// Cache the authoritative entry locally. A local write failure only costs
+	// a future restore, so it must not fail the build.
+	_, _ = c.local.Put(ctx, key, output, stored)
+	return stored, nil
+}
+
+// removeInstallDir drops the workspace install tree for key. The remote artifact
+// record is gone, so the local copy is stale and a rebuild must start clean.
+func (c readThroughCache) removeInstallDir(key cache.Key) error {
+	if c.workspaceDir == "" {
+		return nil
+	}
+	escaped, err := module.EscapePath(key.Module.Path)
+	if err != nil {
+		return err
+	}
+	installDir := filepath.Join(c.workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, key.Module.Version, key.Matrix))
+	return os.RemoveAll(installDir)
 }
 
 func loadConfig() (config, error) {
