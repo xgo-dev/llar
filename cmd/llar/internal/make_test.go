@@ -5,31 +5,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/fs"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/artifact/archiver"
-	"github.com/goplus/llar/internal/build"
-	buildcache "github.com/goplus/llar/internal/build/cache"
+	loader "github.com/goplus/llar/formula"
+	"github.com/goplus/llar/formula/repo"
 	"github.com/goplus/llar/internal/execbroker"
-	"github.com/goplus/llar/internal/formula/repo"
-	"github.com/goplus/llar/internal/metadata"
-	"github.com/goplus/llar/internal/modules"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
+	"github.com/goplus/llar/modules"
+	"github.com/goplus/llar/runtime/formula"
 )
 
 func TestParseModuleArg(t *testing.T) {
@@ -187,6 +180,23 @@ func TestBuildModuleRejectsCrossTargetTest(t *testing.T) {
 
 	err := buildModule(context.Background(), nil, "owner/repo", "v1.0.0", matrix, true)
 	want := fmt.Sprintf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
+	if err == nil || err.Error() != want {
+		t.Fatalf("buildModule error = %v, want %q", err, want)
+	}
+}
+
+func TestBuildModuleRejectsCrossTargetMake(t *testing.T) {
+	targetOS, targetArch := "linux", "amd64"
+	if runtime.GOOS == targetOS && runtime.GOARCH == targetArch {
+		targetArch = "arm64"
+	}
+	matrix := formula.Matrix{Require: map[string][]string{
+		"os":   {targetOS},
+		"arch": {targetArch},
+	}}
+
+	err := buildModule(context.Background(), nil, "owner/repo", "v1.0.0", matrix, false)
+	want := fmt.Sprintf("llar make cannot build %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
 	if err == nil || err.Error() != want {
 		t.Fatalf("buildModule error = %v, want %q", err, want)
 	}
@@ -445,145 +455,6 @@ func TestMakeLocal_RealDemoWithRemoteZlibDep(t *testing.T) {
 	}
 }
 
-type fakeCache struct {
-	entry  buildcache.Entry
-	hit    bool
-	err    error
-	gets   int
-	putErr error
-	puts   int
-}
-
-func (c *fakeCache) Get(context.Context, buildcache.Key) (buildcache.Entry, bool, error) {
-	c.gets++
-	return c.entry, c.hit, c.err
-}
-
-func (c *fakeCache) Put(_ context.Context, _ buildcache.Key, _ fs.FS, entry buildcache.Entry) (buildcache.Entry, error) {
-	c.puts++
-	if c.putErr != nil {
-		return buildcache.Entry{}, c.putErr
-	}
-	return entry, nil
-}
-
-func TestReadThroughCache(t *testing.T) {
-	key := buildcache.Key{Module: module.Version{Path: "test/liba", Version: "1.0.0"}, Matrix: "amd64-linux"}
-	ctx := context.Background()
-	localErr := errors.New("local failed")
-	localPutErr := errors.New("local put failed")
-	remoteErr := errors.New("remote failed")
-	tests := []struct {
-		name       string
-		local      *fakeCache
-		remote     *fakeCache
-		want       buildcache.Entry
-		wantOK     bool
-		wantErr    error
-		localPuts  int
-		remoteGets int
-	}{
-		{
-			name:       "local hit skips remote",
-			local:      &fakeCache{entry: buildcache.Entry{Metadata: "-local"}, hit: true},
-			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
-			want:       buildcache.Entry{Metadata: "-local"},
-			wantOK:     true,
-			remoteGets: 0,
-		},
-		{
-			name:       "local error skips remote",
-			local:      &fakeCache{err: localErr},
-			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
-			wantErr:    localErr,
-			remoteGets: 0,
-		},
-		{
-			name:       "remote hit after local miss",
-			local:      &fakeCache{},
-			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
-			want:       buildcache.Entry{Metadata: "-remote"},
-			wantOK:     true,
-			localPuts:  1,
-			remoteGets: 1,
-		},
-		{
-			name:       "local write error after remote hit",
-			local:      &fakeCache{putErr: localPutErr},
-			remote:     &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true},
-			wantErr:    localPutErr,
-			localPuts:  1,
-			remoteGets: 1,
-		},
-		{
-			name:       "remote error after local miss",
-			local:      &fakeCache{},
-			remote:     &fakeCache{err: remoteErr},
-			wantErr:    remoteErr,
-			remoteGets: 1,
-		},
-		{
-			name:       "miss",
-			local:      &fakeCache{},
-			remote:     &fakeCache{},
-			remoteGets: 1,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c := readThroughCache{remote: tt.remote, local: tt.local}
-			entry, ok, err := c.Get(ctx, key)
-			if !errors.Is(err, tt.wantErr) || ok != tt.wantOK || !reflect.DeepEqual(entry, tt.want) {
-				t.Fatalf("Get = %+v, %v, %v; want %+v, %v, %v", entry, ok, err, tt.want, tt.wantOK, tt.wantErr)
-			}
-			if tt.local.gets != 1 || tt.remote.gets != tt.remoteGets {
-				t.Fatalf("Get calls = local:%d remote:%d, want local:1 remote:%d", tt.local.gets, tt.remote.gets, tt.remoteGets)
-			}
-			if tt.local.puts != tt.localPuts {
-				t.Fatalf("local Put calls = %d, want %d", tt.local.puts, tt.localPuts)
-			}
-		})
-	}
-
-	t.Run("put writes only local", func(t *testing.T) {
-		remote := &fakeCache{}
-		local := &fakeCache{}
-		c := readThroughCache{remote: remote, local: local}
-		entry, err := c.Put(ctx, key, nil, buildcache.Entry{Metadata: "-built"})
-		if err != nil || entry.Metadata != "-built" || local.puts != 1 || remote.puts != 0 {
-			t.Fatalf("Put = %+v, %v; puts = local:%d remote:%d", entry, err, local.puts, remote.puts)
-		}
-	})
-}
-
-func TestReadThroughCachePersistsRemoteHit(t *testing.T) {
-	key := buildcache.Key{Module: module.Version{Path: "test/liba", Version: "1.0.0"}, Matrix: "amd64-linux"}
-	remote := &fakeCache{entry: buildcache.Entry{Metadata: "-remote"}, hit: true}
-	workspaceDir := t.TempDir()
-	c := readThroughCache{
-		remote: remote,
-		local:  build.NewLocalCache(workspaceDir),
-	}
-
-	entry, ok, err := c.Get(context.Background(), key)
-	if err != nil || !ok || entry.Metadata != "-remote" {
-		t.Fatalf("first Get = %+v, %v, %v", entry, ok, err)
-	}
-	if _, err := os.Stat(filepath.Join(workspaceDir, "test", "liba", ".cache.json")); err != nil {
-		t.Fatalf("local cache entry was not persisted: %v", err)
-	}
-
-	for i := 0; i < 2; i++ {
-		entry, ok, err := c.Get(context.Background(), key)
-		if err != nil || !ok || entry.Metadata != "-remote" {
-			t.Fatalf("cached Get %d = %+v, %v, %v", i+1, entry, ok, err)
-		}
-	}
-	if remote.gets != 1 {
-		t.Fatalf("remote Get calls = %d, want 1", remote.gets)
-	}
-}
-
 // TestBuildModule_WorkspaceDirError covers the failure to resolve the local
 // workspace that both the caches and the builder are injected with.
 func TestBuildModule_WorkspaceDirError(t *testing.T) {
@@ -631,89 +502,6 @@ func TestMakeReal_NoVersion(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent module without version")
 	}
-}
-
-// TestMakeReal_ReusesPublishedArtifact verifies that `llar make` reuses a
-// published artifact from the public artifact origin instead of building from
-// source. GitHub source clones are disabled and the local formula installs no
-// files, so the restored artifact is the only source of the installed header.
-func TestMakeReal_ReusesPublishedArtifact(t *testing.T) {
-	formulaDir := setupLocalFormulas(t)
-	workspaceDir := isolatedWorkspaceDir(t)
-	blockGitHubClones(t)
-
-	matrixStr := computeMatrixStr()
-	installDir := filepath.Join(workspaceDir, fmt.Sprintf("madler/zlib@v1.3.1-%s", matrixStr))
-	servePublishedZlibArtifact(t, matrixStr, installDir)
-
-	origDir, _ := os.Getwd()
-	os.Chdir(formulaDir)
-	defer os.Chdir(origDir)
-
-	out, err := runMakeCmd(t, "./madler/zlib@v1.3.1")
-	if err != nil {
-		t.Fatalf("llar make failed: %v", err)
-	}
-	if !strings.Contains(out, "-lz") {
-		t.Fatalf("metadata = %q, want -lz", out)
-	}
-	if _, err := os.Stat(filepath.Join(installDir, "include", "zlib.h")); err != nil {
-		t.Fatalf("published artifact not restored at %s: %v", installDir, err)
-	}
-}
-
-// servePublishedZlibArtifact starts a real HTTP origin that serves a real
-// zlib artifact for the given matrix and points the public artifact domain at
-// it.
-func servePublishedZlibArtifact(t *testing.T, matrixStr, installDir string) {
-	t.Helper()
-
-	source := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(source, "include"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(source, "include", "zlib.h"), []byte("zlib"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	meta, err := metadata.Encode(metadata.Info{Metadata: "-L" + installDir + "/lib -lz"}, installDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	archive := filepath.Join(t.TempDir(), "artifact.tar.gz")
-	if err := archiver.Pack(source, archive, meta); err != nil {
-		t.Fatal(err)
-	}
-	body, err := os.ReadFile(archive)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	objectPath := fmt.Sprintf("/madler/zlib/v1.3.1/%s.tar.gz", matrixStr)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == objectPath {
-			_, _ = w.Write(body)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	originalDomain := publicKodoDomain
-	publicKodoDomain = server.URL
-	t.Cleanup(func() {
-		publicKodoDomain = originalDomain
-		server.Close()
-	})
-}
-
-// blockGitHubClones makes every github.com clone fail, so a passing build
-// proves the artifacts came from the install service instead of a source build.
-func blockGitHubClones(t *testing.T) {
-	t.Helper()
-	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
-	content := "[url \"https://127.0.0.1:1/\"]\n\tinsteadOf = https://github.com/\n"
-	if err := os.WriteFile(gitConfig, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
 }
 
 // TODO: resolve dynamic library symlink issue
@@ -1039,11 +827,17 @@ func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 
 	stdout, stderr, restore := captureProcessStreams(t)
 	buildCtx := formula.NewContext(nil, "", "", "", nil)
+	formulas, err := loader.LoadFS(mods[0].FS, ".")
+	if err != nil || len(formulas) != 1 {
+		restore()
+		t.Fatalf("LoadFS() = %d formulas, %v; want one formula", len(formulas), err)
+	}
+	formulas[0].SetMatrix(matrix)
 	err = execbroker.Do(execbroker.Scope{
 		Stdout: os.Stderr,
 		Stderr: os.Stderr,
 	}, func() error {
-		mods[0].OnBuild(buildCtx)
+		formulas[0].OnBuild(buildCtx)
 		return nil
 	})
 	restore()

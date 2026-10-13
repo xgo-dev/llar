@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/internal/formula/repo"
+	"github.com/goplus/llar/formula/repo"
 )
 
 // runTestCmd mirrors runMakeCmd for the `llar test` subcommand. It executes
@@ -127,33 +127,5 @@ func TestTestLocal_NotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to parse") {
 		t.Errorf("expected 'failed to parse' error, got: %v", err)
-	}
-}
-
-// TestTestReal_ReusesPublishedArtifact verifies `llar test` also reuses a
-// published artifact from the public artifact origin. GitHub source clones are
-// disabled, so onTest can only run against the restored artifact.
-func TestTestReal_ReusesPublishedArtifact(t *testing.T) {
-	formulaDir := setupLocalFormulas(t)
-	workspaceDir := isolatedWorkspaceDir(t)
-	blockGitHubClones(t)
-
-	matrixStr := computeMatrixStr()
-	installDir := filepath.Join(workspaceDir, fmt.Sprintf("madler/zlib@v1.3.1-%s", matrixStr))
-	servePublishedZlibArtifact(t, matrixStr, installDir)
-
-	origDir, _ := os.Getwd()
-	os.Chdir(formulaDir)
-	defer os.Chdir(origDir)
-
-	out, err := runTestCmd(t, "./madler/zlib@v1.3.1")
-	if err != nil {
-		t.Fatalf("llar test failed: %v", err)
-	}
-	if !strings.Contains(out, "-lz") {
-		t.Fatalf("metadata = %q, want -lz", out)
-	}
-	if _, err := os.Stat(filepath.Join(installDir, "include", "zlib.h")); err != nil {
-		t.Fatalf("published artifact not restored at %s: %v", installDir, err)
 	}
 }

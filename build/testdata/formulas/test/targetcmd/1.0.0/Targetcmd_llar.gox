@@ -1,0 +1,10 @@
+import "os/exec"
+
+id "test/targetcmd"
+
+fromVer "1.0.0"
+
+onBuild ctx => {
+	command := exec.command("cc", "-c", "a.c")
+	ctx.setMetadata command.Args[0]
+}

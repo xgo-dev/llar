@@ -54,12 +54,12 @@ cmd/llar/internal/make.go          (CLI argument parsing)
          |  parseModuleArg(arg) -> (pattern, version, isLocal, err)
          |
          v
-internal/modules/modlocal/         (local module discovery)
+modules/modlocal/                  (local module discovery)
          |
          |  Resolve(cwd, pattern) -> []Module{Path, Dir}
          |
          v
-internal/formula/repo/overlay.go   (store composition)
+formula/repo/overlay.go            (store composition)
          |
          |  NewOverlayStore(remote, locals) -> Store
          |
@@ -78,12 +78,12 @@ data (`map[string]string`) or interfaces (`repo.Store`):
 - **`modlocal.Resolve`** — Scans the filesystem for `versions.json` files
   matching the given pattern, reads their `path` field, and returns
   `(Path, Dir)` pairs. No dependency on `modules` or `repo` packages.
-  Lives in `internal/modules/modlocal/`.
+  Lives in `modules/modlocal/`.
 
 - **`repo.NewOverlayStore`** — Decorates a remote `Store` with local
   directory overrides. Modules in the locals map are served via `os.DirFS`;
   all others delegate to the remote store. Implements `repo.Store` interface.
-  Lives in `internal/formula/repo/`.
+  Lives in `formula/repo/`.
 
 `modules.Load` is unchanged — it receives a `Store` and does not know whether
 modules come from remote or local sources.

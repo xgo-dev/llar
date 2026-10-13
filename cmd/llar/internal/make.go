@@ -5,21 +5,18 @@ import (
 	"fmt"
 	stdbuild "go/build"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
-	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/internal/build"
-	buildcache "github.com/goplus/llar/internal/build/cache"
-	"github.com/goplus/llar/internal/crosscompile"
-	"github.com/goplus/llar/internal/formula/repo"
-	"github.com/goplus/llar/internal/modules"
-	"github.com/goplus/llar/internal/modules/modlocal"
+	"github.com/goplus/llar/build"
+	"github.com/goplus/llar/formula/repo"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
+	"github.com/goplus/llar/modules"
+	"github.com/goplus/llar/modules/modlocal"
+	"github.com/goplus/llar/runtime/formula"
 	"github.com/spf13/cobra"
 )
 
@@ -38,40 +35,6 @@ var newRemoteStore = func() (repo.Store, error) {
 		return nil, err
 	}
 	return repo.New(formulaDir, formulaRepo), nil
-}
-
-// publicKodoDomain serves published build artifacts without credentials.
-var publicKodoDomain = "https://llarpackages.xgo.dev"
-
-// readThroughCache reuses artifacts in the local workspace before fetching
-// published artifacts from remote. Remote hits are indexed in the workspace
-// cache so later commands can reuse the restored artifact without downloading
-// it again. Locally built artifacts are written only to the workspace cache.
-type readThroughCache struct {
-	remote buildcache.Cache
-	local  buildcache.Cache
-}
-
-func (c readThroughCache) Get(ctx context.Context, key buildcache.Key) (buildcache.Entry, bool, error) {
-	entry, ok, err := c.local.Get(ctx, key)
-	if err != nil || ok {
-		return entry, ok, err
-	}
-	entry, ok, err = c.remote.Get(ctx, key)
-	if err != nil || !ok {
-		return entry, ok, err
-	}
-	// The remote cache already restored the artifact into the shared workspace,
-	// so the local cache only needs to persist its entry.
-	entry, err = c.local.Put(ctx, key, nil, entry)
-	if err != nil {
-		return buildcache.Entry{}, false, err
-	}
-	return entry, true, nil
-}
-
-func (c readThroughCache) Put(ctx context.Context, key buildcache.Key, output fs.FS, entry buildcache.Entry) (buildcache.Entry, error) {
-	return c.local.Put(ctx, key, output, entry)
 }
 
 var makeCmd = &cobra.Command{
@@ -175,8 +138,11 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		targetArch = values[0]
 	}
 	crossCompile := targetOS != runtime.GOOS || targetArch != runtime.GOARCH
-	if runTest && crossCompile {
-		return fmt.Errorf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
+	if crossCompile {
+		if runTest {
+			return fmt.Errorf("llar test cannot run %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
+		}
+		return fmt.Errorf("llar make cannot build %s/%s target on %s/%s host", targetOS, targetArch, runtime.GOOS, runtime.GOARCH)
 	}
 	loadOpts := modules.Options{
 		FormulaStore: store,
@@ -192,13 +158,12 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		buildOutput = os.Stderr
 	}
 
-	matrixStr := matrix.Combinations()[0]
 	buildOpts := build.Options{
-		Store:     store,
-		MatrixStr: matrixStr,
-		RunTest:   runTest,
-		Stdout:    buildOutput,
-		Stderr:    buildOutput,
+		Store:        store,
+		TargetMatrix: matrix,
+		RunTest:      runTest,
+		Stdout:       buildOutput,
+		Stderr:       buildOutput,
 	}
 	if makeOutput != "" {
 		tmpDir, err := os.MkdirTemp("", "llar-make-*")
@@ -216,33 +181,7 @@ func buildModule(ctx context.Context, store repo.Store, modPath, version string,
 		}
 		buildOpts.WorkspaceDir = workspaceDir
 	}
-	// Reuse published artifacts from the public Kodo store when available, and
-	// fall back to the local workspace cache and source builds otherwise.
-	buildOpts.Cache = readThroughCache{
-		remote: buildcache.NewKodo(buildcache.KodoConfig{
-			PublicDomain: publicKodoDomain,
-			WorkspaceDir: buildOpts.WorkspaceDir,
-		}),
-		local: build.NewLocalCache(buildOpts.WorkspaceDir),
-	}
-
-	target, err := crosscompile.Load(ctx, root, crosscompile.Config{
-		Store:        store,
-		Matrix:       matrix,
-		Stdout:       buildOpts.Stdout,
-		Stderr:       buildOpts.Stderr,
-		WorkspaceDir: buildOpts.WorkspaceDir,
-		Cache:        buildOpts.Cache,
-	})
-	if err != nil {
-		return err
-	}
-	if target != nil {
-		if closer, ok := target.(io.Closer); ok {
-			defer closer.Close()
-		}
-		buildOpts.Target = target
-	}
+	buildOpts.Cache = build.NewLocalCache(buildOpts.WorkspaceDir)
 	builder, err := build.NewBuilder(buildOpts)
 	if err != nil {
 		return fmt.Errorf("failed to create builder: %w", err)
