@@ -4,7 +4,8 @@ project_name: llar
 
 builds:
   - id: llar
-    main: ./cmd/llar
+    dir: cmd
+    main: ./llar
     binary: llar
     env:
       - CGO_ENABLED=0

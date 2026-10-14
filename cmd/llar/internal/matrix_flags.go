@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/goplus/llar/runtime/formula"
+	"github.com/goplus/llar/build/runtime/formula"
 	goflags "github.com/jessevdk/go-flags"
 	"github.com/spf13/cobra"
 )

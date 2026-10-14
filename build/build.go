@@ -12,13 +12,13 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/build/cache"
-	"github.com/goplus/llar/formula"
-	"github.com/goplus/llar/formula/repo"
+	"github.com/goplus/llar/build/formula"
+	"github.com/goplus/llar/build/formula/repo"
+	"github.com/goplus/llar/build/modules"
+	classfile "github.com/goplus/llar/build/runtime/formula"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
-	"github.com/goplus/llar/modules"
-	classfile "github.com/goplus/llar/runtime/formula"
 )
 
 type Builder struct {

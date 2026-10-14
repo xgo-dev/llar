@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goplus/llar/build/modules"
+	classfile "github.com/goplus/llar/build/runtime/formula"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
-	"github.com/goplus/llar/modules"
-	classfile "github.com/goplus/llar/runtime/formula"
 )
 
 // ---------------------------------------------------------------------------

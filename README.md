@@ -82,6 +82,19 @@ llar make ./madler/zlib@v1.3.1
 | `-j, --json` | Print the module result as JSON |
 | `-o, --output <path>` | Output path (directory, `.zip`, or `.tar.gz`) |
 
+## Development
+
+The repository has three Go modules. The root module contains shared module data and infrastructure, `build` contains the formula runtime and source build engine, and `cmd` contains the complete CLI. The CLI calls the build module directly; install, make, and test remain commands in one executable.
+
+```bash
+go test -ldflags="-checklinkname=0" ./...
+go -C build test -ldflags="-checklinkname=0" ./...
+go -C cmd test -ldflags="-checklinkname=0" ./...
+go -C cmd run -ldflags="-checklinkname=0" ./llar --help
+```
+
+The submodules currently use local `replace` directives for workspace and CI builds. Standalone module installation requires published dependency versions.
+
 ## How It Works
 
 1. **Formula resolution** - LLAR fetches the build formula for the requested module from the formula hub

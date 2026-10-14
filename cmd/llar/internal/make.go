@@ -11,12 +11,12 @@ import (
 	"strings"
 
 	"github.com/goplus/llar/build"
-	"github.com/goplus/llar/formula/repo"
+	"github.com/goplus/llar/build/formula/repo"
+	"github.com/goplus/llar/build/modules"
+	"github.com/goplus/llar/build/modules/modlocal"
+	"github.com/goplus/llar/build/runtime/formula"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
-	"github.com/goplus/llar/modules"
-	"github.com/goplus/llar/modules/modlocal"
-	"github.com/goplus/llar/runtime/formula"
 	"github.com/spf13/cobra"
 )
 

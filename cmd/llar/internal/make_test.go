@@ -16,13 +16,13 @@ import (
 	"testing"
 	"time"
 
-	loader "github.com/goplus/llar/formula"
-	"github.com/goplus/llar/formula/repo"
+	loader "github.com/goplus/llar/build/formula"
+	"github.com/goplus/llar/build/formula/repo"
+	"github.com/goplus/llar/build/modules"
+	"github.com/goplus/llar/build/runtime/formula"
 	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
-	"github.com/goplus/llar/modules"
-	"github.com/goplus/llar/runtime/formula"
 )
 
 func TestParseModuleArg(t *testing.T) {

@@ -17,10 +17,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/goplus/llar/build/runtime/formula"
 	"github.com/goplus/llar/internal/artifact/archiver"
 	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/mod/module"
-	"github.com/goplus/llar/runtime/formula"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
