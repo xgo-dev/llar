@@ -32,12 +32,12 @@ jobs:
           go-version: ${{matrix.go}}
           cache-dependency-path: |
             go.sum
-            build/go.sum
+            x/go.sum
             cmd/go.sum
       - name: Download Go modules
         run: go mod download
-      - name: Download build modules
-        working-directory: build
+      - name: Download x modules
+        working-directory: x
         run: go mod download
       - name: Download command modules
         working-directory: cmd
@@ -45,14 +45,14 @@ jobs:
       - name: Check root module isolation
         run: |
           task_modules=$(go list -m -f '{{.Path}}' all)
-          if printf '%s\n' "$task_modules" | grep -E '^(github.com/goplus/(llar/(build|cmd)|ixgo|xgo|gogen)|github.com/spf13/cobra|github.com/jessevdk/go-flags)$'; then
+          if printf '%s\n' "$task_modules" | grep -E '^(github.com/goplus/(llar/(x|cmd)|ixgo|xgo|gogen)|github.com/spf13/cobra|github.com/jessevdk/go-flags)$'; then
             exit 1
           fi
       - name: Test shared packages
         run: go test -v -ldflags="-checklinkname=0" -race -covermode atomic -coverprofile coverage.out ./...
-      - name: Test build
-        working-directory: build
-        run: go test -v -ldflags="-checklinkname=0" -race -covermode atomic -coverprofile ../build-coverage.out ./...
+      - name: Test x packages
+        working-directory: x
+        run: go test -v -ldflags="-checklinkname=0" -race -covermode atomic -coverprofile ../x-coverage.out ./...
       - name: Test command
         working-directory: cmd
         run: go test -v -ldflags="-checklinkname=0" -race -covermode atomic -coverprofile ../cmd-coverage.out ./...
@@ -61,4 +61,4 @@ jobs:
         with:
           token: ${{secrets.CODECOV_TOKEN}}
           disable_search: true
-          files: coverage.out,build-coverage.out,cmd-coverage.out
+          files: coverage.out,x-coverage.out,cmd-coverage.out

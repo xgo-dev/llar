@@ -10,10 +10,12 @@
 
 ### Environment Access in `x`
 
-- All environment reads and writes under `build/runtime/x/`, including tests and test
+- All environment reads and writes under `x/`, including tests and test
   helpers, must use `internal/execbroker` (`Getenv`, `LookupEnv`, `Setenv`,
   `Unsetenv`, `Clearenv`, `Environ`, or `ExpandEnv`). Do not call the `os` or
   `syscall` environment APIs directly from `x/`.
+- This approved directory-only migration preserves existing environment code.
+  Changes to those call sites require separate approval.
 
 ### Command and Flag Changes
 
@@ -50,11 +52,11 @@ Classfile is a DSL (Domain Specific Language) mechanism in xgo that allows defin
 
 ### How Classfile Works
 
-1. **Registration**: Classfiles are registered via `xgobuild.RegisterProject()` in `build/runtime/classfile.go`
+1. **Registration**: Classfiles are registered via `xgobuild.RegisterProject()` in `x/runtime/classfile.go`
 
 2. **File Extension Mapping**:
-   - `_llar.gox` -> `ModuleF` class (build/runtime/formula/classfile.go)
-   - `_cmp.gox` -> `CmpApp` class (build/runtime/formula/classfile.go)
+   - `_llar.gox` -> `ModuleF` class (x/runtime/formula/classfile.go)
+   - `_cmp.gox` -> `CmpApp` class (x/runtime/formula/classfile.go)
 
 3. **Code Generation**: When a `.gox` file is processed:
    - The filename without the registered `_llar.gox` suffix becomes the struct name
@@ -84,7 +86,7 @@ package main
 
 import (
     "fmt"
-    "github.com/goplus/llar/build/runtime/formula"
+    "github.com/goplus/llar/x/runtime/formula"
 )
 
 type hello struct {
@@ -126,18 +128,21 @@ func main() {
 ```bash
 # Run tests with required ldflags (Go 1.24+)
 go test -ldflags="-checklinkname=0" ./...
-go -C build test -ldflags="-checklinkname=0" ./...
+go -C x test -ldflags="-checklinkname=0" ./...
 go -C cmd test -ldflags="-checklinkname=0" ./...
 
 # Run specific package tests with coverage
-go -C build test -ldflags="-checklinkname=0" -cover ./formula/...
+go -C x test -ldflags="-checklinkname=0" -cover ./formula/...
 ```
 
 ## Project Structure
 
 - Root module - Shared module data and infrastructure; no construction or interpreter dependencies
-- `build/` - Independent module for source builds, formula loading, dependency resolution, and classfile runtime
-- `build/runtime/formula/` - Classfile definitions (ModuleF, Context, Project, etc.)
-- `build/runtime/` - ixgo classfile registration and bindings
+- `x/` - One independent module containing source libraries
+- `x/build/` - Source builds and build cache
+- `x/formula/` - Formula loading
+- `x/modules/` - Dependency resolution
+- `x/runtime/formula/` - Classfile definitions (ModuleF, Context, Project, etc.)
+- `x/runtime/` - ixgo classfile registration and bindings
 - `cmd/` - Independent CLI module; install, make, and test directly call their owning packages
 - `mod/` - Shared module and version data

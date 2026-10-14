@@ -84,11 +84,11 @@ llar make ./madler/zlib@v1.3.1
 
 ## Development
 
-The repository has three Go modules. The root module contains shared module data and infrastructure, `build` contains the formula runtime and source build engine, and `cmd` contains the complete CLI. The CLI calls the build module directly; install, make, and test remain commands in one executable.
+The repository has three Go modules. The root module contains shared module data and infrastructure, `x` contains the `build`, `formula`, `modules`, and `runtime` packages, and `cmd` contains the complete CLI. The CLI calls these packages directly; install, make, and test remain commands in one executable.
 
 ```bash
 go test -ldflags="-checklinkname=0" ./...
-go -C build test -ldflags="-checklinkname=0" ./...
+go -C x test -ldflags="-checklinkname=0" ./...
 go -C cmd test -ldflags="-checklinkname=0" ./...
 go -C cmd run -ldflags="-checklinkname=0" ./llar --help
 ```

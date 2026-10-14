@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/goplus/llar/build/runtime/formula"
+	"github.com/goplus/llar/x/runtime/formula"
 	"github.com/spf13/cobra"
 )
 

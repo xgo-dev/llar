@@ -13,12 +13,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/goplus/llar/build"
-	buildcache "github.com/goplus/llar/build/cache"
-	"github.com/goplus/llar/build/runtime/formula"
 	"github.com/goplus/llar/internal/artifact/archiver"
 	"github.com/goplus/llar/internal/metadata"
 	"github.com/goplus/llar/mod/module"
+	"github.com/goplus/llar/x/build"
+	buildcache "github.com/goplus/llar/x/build/cache"
+	"github.com/goplus/llar/x/runtime/formula"
 	"github.com/qiniu/x/cmdjsonl"
 	"github.com/spf13/cobra"
 )

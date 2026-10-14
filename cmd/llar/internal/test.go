@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/goplus/llar/build/formula/repo"
-	"github.com/goplus/llar/build/modules/modlocal"
+	"github.com/goplus/llar/x/formula/repo"
+	"github.com/goplus/llar/x/modules/modlocal"
 	"github.com/spf13/cobra"
 )
 

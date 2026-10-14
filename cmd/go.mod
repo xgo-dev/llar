@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/goplus/llar v0.3.5
-	github.com/goplus/llar/build v0.0.0-00010101000000-000000000000
+	github.com/goplus/llar/x v0.0.0-00010101000000-000000000000
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/qiniu/x v1.18.3
 	github.com/spf13/cobra v1.10.2
@@ -30,5 +30,5 @@ require (
 
 replace (
 	github.com/goplus/llar => ..
-	github.com/goplus/llar/build => ../build
+	github.com/goplus/llar/x => ../x
 )

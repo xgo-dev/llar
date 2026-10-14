@@ -10,13 +10,13 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/goplus/llar/build"
-	"github.com/goplus/llar/build/formula/repo"
-	"github.com/goplus/llar/build/modules"
-	"github.com/goplus/llar/build/modules/modlocal"
-	"github.com/goplus/llar/build/runtime/formula"
 	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
+	"github.com/goplus/llar/x/build"
+	"github.com/goplus/llar/x/formula/repo"
+	"github.com/goplus/llar/x/modules"
+	"github.com/goplus/llar/x/modules/modlocal"
+	"github.com/goplus/llar/x/runtime/formula"
 	"github.com/spf13/cobra"
 )
 
