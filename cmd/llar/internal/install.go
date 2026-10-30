@@ -1,35 +1,19 @@
 package internal
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"mime"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/goplus/llar/internal/artifact/archiver"
-	"github.com/goplus/llar/internal/metadata"
+	installer "github.com/goplus/llar/install"
 	"github.com/goplus/llar/mod/module"
-	"github.com/goplus/llar/x/build"
-	buildcache "github.com/goplus/llar/x/build/cache"
 	"github.com/goplus/llar/x/runtime/formula"
-	"github.com/qiniu/x/cmdjsonl"
 	"github.com/spf13/cobra"
 )
 
 const llardServiceURL = "https://llar.xgo.dev"
-
-type installArtifactMessage struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
-	URL  string `json:"url"`
-}
 
 var installVerbose bool
 var installOutput string
@@ -106,236 +90,49 @@ func install(ctx context.Context, progress io.Writer, serviceURL, arg string, ma
 	if isLocal {
 		return moduleOutputResult{}, fmt.Errorf("llar install does not support local formulas: %q", arg)
 	}
-
-	baseURL, err := url.Parse(serviceURL)
-	if err != nil || baseURL.Scheme != "http" && baseURL.Scheme != "https" || baseURL.Host == "" {
-		return moduleOutputResult{}, fmt.Errorf("invalid llard service URL %q", serviceURL)
-	}
-	query := make(url.Values, len(matrix.Require)+len(matrix.Options))
-	addMatrix := func(values map[string][]string) error {
-		for key, items := range values {
-			if key == "" {
-				return fmt.Errorf("matrix key is required")
-			}
-			if len(items) != 1 || items[0] == "" {
-				return fmt.Errorf("matrix %q requires exactly one value", key)
-			}
-			if query.Has(key) {
-				return fmt.Errorf("matrix %q is duplicated", key)
-			}
-			query.Set(key, items[0])
-		}
-		return nil
-	}
-	if err := addMatrix(matrix.Require); err != nil {
-		return moduleOutputResult{}, err
-	}
-	if err := addMatrix(matrix.Options); err != nil {
-		return moduleOutputResult{}, err
-	}
-	if len(query) == 0 {
+	if len(matrix.Require) == 0 && len(matrix.Options) == 0 {
 		return moduleOutputResult{}, fmt.Errorf("build matrix is required")
 	}
-
-	requested := module.Version{Path: modPath, Version: version}
-	messages, err := requestInstallArtifacts(ctx, progress, http.DefaultClient, baseURL, requested, query)
+	var config installer.Config
+	for key, values := range matrix.Require {
+		if key == "" {
+			return moduleOutputResult{}, fmt.Errorf("matrix key is required")
+		}
+		if len(values) != 1 || values[0] == "" {
+			return moduleOutputResult{}, fmt.Errorf("matrix %q requires exactly one value", key)
+		}
+		switch key {
+		case "os":
+			config.Require.OS = values[0]
+		case "arch":
+			config.Require.Arch = values[0]
+		case "libc":
+			config.Require.Libc = values[0]
+		default:
+			return moduleOutputResult{}, fmt.Errorf("llar install does not support require %q; use os, arch, or libc", key)
+		}
+	}
+	config.Options = make(map[string]string, len(matrix.Options))
+	for key, values := range matrix.Options {
+		if key == "" {
+			return moduleOutputResult{}, fmt.Errorf("matrix key is required")
+		}
+		if len(values) != 1 || values[0] == "" {
+			return moduleOutputResult{}, fmt.Errorf("matrix %q requires exactly one value", key)
+		}
+		config.Options[key] = values[0]
+	}
+	client := installer.Installer{ServiceURL: serviceURL}
+	installed, err := client.Install(ctx, module.Version{Path: modPath, Version: version}, installer.Options{
+		Config:   config,
+		Progress: progress,
+	})
 	if err != nil {
 		return moduleOutputResult{}, err
 	}
-
-	workspaceDir, err := defaultWorkspaceDir()
-	if err != nil {
-		return moduleOutputResult{}, err
+	result := moduleOutputResult{Module: installed.Module, Metadata: installed.Metadata, OutputDir: installed.Dir}
+	for _, dep := range installed.Deps {
+		result.Deps = append(result.Deps, moduleOutputDep{Module: dep.Module, OutputDir: dep.Dir})
 	}
-	cache := build.NewLocalCache(workspaceDir)
-	matrixStr := matrix.Combinations()[0]
-
-	var rootResult moduleOutputResult
-	deps := make([]moduleOutputDep, 0, len(messages)-1)
-	for _, message := range messages {
-		parsed, err := url.Parse(message.ID)
-		if err != nil {
-			return moduleOutputResult{}, fmt.Errorf("invalid artifact id %q: %w", message.ID, err)
-		}
-		index := strings.LastIndexByte(parsed.Path, '@')
-		if index <= 0 || index == len(parsed.Path)-1 {
-			return moduleOutputResult{}, fmt.Errorf("invalid artifact id %q", message.ID)
-		}
-		mod := module.Version{Path: parsed.Path[:index], Version: parsed.Path[index+1:]}
-
-		escaped, err := module.EscapePath(mod.Path)
-		if err != nil {
-			return moduleOutputResult{}, fmt.Errorf("invalid artifact id %q: %w", message.ID, err)
-		}
-		installDir := filepath.Join(workspaceDir, fmt.Sprintf("%s@%s-%s", escaped, mod.Version, matrixStr))
-		key := buildcache.Key{Module: mod, Matrix: matrixStr}
-		entry, ok, err := cache.Get(ctx, key)
-		if err != nil {
-			return moduleOutputResult{}, fmt.Errorf("read cache for artifact %s: %w", message.ID, err)
-		}
-		if !ok {
-			info, err := downloadInstallArtifact(ctx, http.DefaultClient, baseURL, message, installDir)
-			if err != nil {
-				return moduleOutputResult{}, fmt.Errorf("install artifact %s: %w", message.ID, err)
-			}
-			entry, err = cache.Put(ctx, key, os.DirFS(installDir), buildcache.Entry{
-				Metadata: info.Metadata,
-				Deps:     info.Deps,
-			})
-			if err != nil {
-				return moduleOutputResult{}, fmt.Errorf("cache artifact %s: %w", message.ID, err)
-			}
-		}
-		if mod.Path == requested.Path {
-			rootResult = moduleOutputResult{
-				Module:    mod,
-				Metadata:  entry.Metadata,
-				OutputDir: installDir,
-			}
-		} else {
-			deps = append(deps, moduleOutputDep{Module: mod, OutputDir: installDir})
-		}
-	}
-	rootResult.Deps = deps
-	return rootResult, nil
-}
-
-func requestInstallArtifacts(ctx context.Context, progress io.Writer, client *http.Client, baseURL *url.URL, mod module.Version, query url.Values) ([]installArtifactMessage, error) {
-	endpoint := *baseURL
-	target := mod.Path
-	if mod.Version != "" {
-		target += "@" + mod.Version
-	}
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/v1/artifacts/" + target
-	endpoint.RawQuery = query.Encode()
-	endpoint.Fragment = ""
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("llard returned %s", resp.Status)
-	}
-	mediaType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/x-cmdjsonl" {
-		return nil, fmt.Errorf("llard returned content type %q, want application/x-cmdjsonl", resp.Header.Get("Content-Type"))
-	}
-	if progress == nil {
-		progress = io.Discard
-	}
-
-	var artifacts []installArtifactMessage
-	var responseErrs []error
-	var parser cmdjsonl.Parser
-	if err := parser.HandleFunc("info", func(message string) {
-		fmt.Fprintln(progress, message)
-	}); err != nil {
-		return nil, err
-	}
-	if err := parser.HandleFunc("error", func(message string) {
-		responseErrs = append(responseErrs, fmt.Errorf("llard: %s", message))
-	}); err != nil {
-		return nil, err
-	}
-	if err := parser.HandleFunc("artifact", func(artifact installArtifactMessage) error {
-		if artifact.ID == "" || artifact.Type == "" || artifact.URL == "" {
-			return fmt.Errorf("invalid llard artifact")
-		}
-		artifacts = append(artifacts, artifact)
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	parseErr := parser.Parse(resp.Body, bufio.MaxScanTokenSize)
-	if len(responseErrs) > 0 {
-		return nil, errors.Join(responseErrs...)
-	}
-	if parseErr != nil {
-		return nil, parseErr
-	}
-	if len(artifacts) == 0 {
-		return nil, fmt.Errorf("llard returned no artifacts")
-	}
-	return artifacts, nil
-}
-
-func downloadInstallArtifact(ctx context.Context, client *http.Client, baseURL *url.URL, artifact installArtifactMessage, installDir string) (metadata.Info, error) {
-	var suffix string
-	switch artifact.Type {
-	case "tar.gz":
-		suffix = ".tar.gz"
-	case "zip":
-		suffix = ".zip"
-	default:
-		return metadata.Info{}, fmt.Errorf("unsupported artifact type %q", artifact.Type)
-	}
-
-	source, err := url.Parse(artifact.URL)
-	if err != nil {
-		return metadata.Info{}, err
-	}
-	source = baseURL.ResolveReference(source)
-	if source.Scheme != "http" && source.Scheme != "https" || source.Host == "" {
-		return metadata.Info{}, fmt.Errorf("invalid artifact URL %q", artifact.URL)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source.String(), nil)
-	if err != nil {
-		return metadata.Info{}, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return metadata.Info{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return metadata.Info{}, fmt.Errorf("download returned %s", resp.Status)
-	}
-
-	file, err := os.CreateTemp("", "llar-install-*"+suffix)
-	if err != nil {
-		return metadata.Info{}, err
-	}
-	defer file.Close()
-	defer os.Remove(file.Name())
-	if _, err := io.Copy(file, resp.Body); err != nil {
-		return metadata.Info{}, err
-	}
-	return installDownloadedArtifact(file.Name(), installDir)
-}
-
-func installDownloadedArtifact(fileName, installDir string) (metadata.Info, error) {
-	parent := filepath.Dir(installDir)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
-		return metadata.Info{}, err
-	}
-	stagingDir, err := os.MkdirTemp(parent, ".llar-install-*")
-	if err != nil {
-		return metadata.Info{}, err
-	}
-	defer os.RemoveAll(stagingDir)
-	if err := os.Chmod(stagingDir, 0o755); err != nil {
-		return metadata.Info{}, err
-	}
-
-	data, err := archiver.Unpack(fileName, stagingDir)
-	if err != nil {
-		return metadata.Info{}, err
-	}
-	info, err := metadata.Decode(data, installDir)
-	if err != nil {
-		return metadata.Info{}, err
-	}
-	if err := os.RemoveAll(installDir); err != nil {
-		return metadata.Info{}, err
-	}
-	if err := os.Rename(stagingDir, installDir); err != nil {
-		return metadata.Info{}, err
-	}
-	return info, nil
+	return result, nil
 }
