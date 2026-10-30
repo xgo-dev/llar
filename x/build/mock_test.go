@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/goplus/llar/internal/vcs"
+	"github.com/goplus/llar/x/vcs"
 )
 
 // mockRepo implements vcs.Repo interface for testing.

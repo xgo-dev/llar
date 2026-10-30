@@ -10,11 +10,11 @@ import (
 	"slices"
 	"sort"
 
-	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/x/formula"
 	classfile "github.com/goplus/llar/x/runtime/formula"
 	"github.com/goplus/llar/x/runtime/x/gnu"
+	"github.com/goplus/llar/x/vcs"
 )
 
 const defaultComparatorSuffix = "_cmp.gox"

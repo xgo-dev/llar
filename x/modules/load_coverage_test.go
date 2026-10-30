@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/x/formula"
+	"github.com/goplus/llar/x/vcs"
 )
 
 type fakeReadFileFS struct {

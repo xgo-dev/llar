@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"github.com/goplus/llar/internal/execbroker"
-	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	loader "github.com/goplus/llar/x/formula"
 	"github.com/goplus/llar/x/formula/repo"
 	"github.com/goplus/llar/x/modules"
 	"github.com/goplus/llar/x/runtime/formula"
+	"github.com/goplus/llar/x/vcs"
 )
 
 func TestParseModuleArg(t *testing.T) {

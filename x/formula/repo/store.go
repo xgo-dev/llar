@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 
 	"github.com/goplus/llar/internal/lockedfile"
-	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
+	"github.com/goplus/llar/x/vcs"
 )
 
 // Store provides access to module formulas through a filesystem abstraction.

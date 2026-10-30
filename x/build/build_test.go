@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/x/build/cache"
 	"github.com/goplus/llar/x/formula/repo"
 	"github.com/goplus/llar/x/modules"
 	classfile "github.com/goplus/llar/x/runtime/formula"
+	"github.com/goplus/llar/x/vcs"
 )
 
 // mod creates a Module with the given path, version, and direct deps.

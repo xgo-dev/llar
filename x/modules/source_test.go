@@ -9,10 +9,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/x/formula/repo"
 	classfile "github.com/goplus/llar/x/runtime/formula"
+	"github.com/goplus/llar/x/vcs"
 )
 
 func TestNewFormulaModule(t *testing.T) {

@@ -9,12 +9,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/mod/versions"
 	"github.com/goplus/llar/x/formula"
 	"github.com/goplus/llar/x/formula/repo"
 	"github.com/goplus/llar/x/internal/mvs"
+	"github.com/goplus/llar/x/vcs"
 
 	classfile "github.com/goplus/llar/x/runtime/formula"
 )

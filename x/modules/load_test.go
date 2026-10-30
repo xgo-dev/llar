@@ -11,11 +11,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/internal/vcs"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/x/formula"
 	"github.com/goplus/llar/x/formula/repo"
 	classfile "github.com/goplus/llar/x/runtime/formula"
+	"github.com/goplus/llar/x/vcs"
 )
 
 // mockVCSRepo implements vcs.Repo for testing without network access.
