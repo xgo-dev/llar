@@ -173,6 +173,33 @@ func TestDownloadInstallArtifactResponses(t *testing.T) {
 		})
 	}
 
+	t.Run("install preserves symlinks", func(t *testing.T) {
+		source := t.TempDir()
+		if err := os.WriteFile(filepath.Join(source, "libfoo.so.1"), []byte("library"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("libfoo.so.1", filepath.Join(source, "libfoo.so")); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		for _, ext := range []string{".zip", ".tar.gz"} {
+			t.Run(ext, func(t *testing.T) {
+				archive := filepath.Join(t.TempDir(), "artifact"+ext)
+				if err := archiver.Pack(source, archive, json.RawMessage(`{"metadata":"-lfoo"}`)); err != nil {
+					t.Fatal(err)
+				}
+				dest := filepath.Join(t.TempDir(), "install")
+				if _, err := installDownloadedArtifact(archive, dest); err != nil {
+					t.Fatal(err)
+				}
+				target, err := os.Readlink(filepath.Join(dest, "libfoo.so"))
+				if err != nil || target != "libfoo.so.1" {
+					t.Fatalf("installed symlink target = %q, error = %v", target, err)
+				}
+				assertInstallFile(t, filepath.Join(dest, "libfoo.so"), "library")
+			})
+		}
+	})
+
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
 	if _, err := downloadInstallArtifact(context.Background(), server.Client(), baseURL, installArtifactMessage{Type: "zip", URL: "/artifact.zip"}, filepath.Join(t.TempDir(), "install")); err == nil {
 		t.Fatal("downloadInstallArtifact() succeeded with an unavailable temporary directory")

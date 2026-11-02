@@ -122,15 +122,12 @@ func TestPackFileSymlinksRoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "libc-2.24.so"), []byte("library content"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(src, "empty"), nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, link := range []struct{ name, target string }{
-		{"libc.so.6", "libc-2.24.so"},
-		{"libc.so", "libc.so.6"},
+	links := []struct{ name, target string }{
+		{"libc.so.6", "libc-2.24.so"}, {"libc.so", "libc.so.6"},
 		{"absolute", filepath.Join(src, "libc-2.24.so")},
-		{"empty-link", "empty"},
-	} {
+		{"dangling", "missing"}, {"external", "/lib/libc.so"},
+	}
+	for _, link := range links {
 		if err := os.Symlink(link.target, filepath.Join(src, link.name)); err != nil {
 			t.Skipf("symlink unsupported: %v", err)
 		}
@@ -150,37 +147,21 @@ func TestPackFileSymlinksRoundTrip(t *testing.T) {
 			if string(got) != string(metainfo) {
 				t.Fatalf("metadata = %s, want %s", got, metainfo)
 			}
-			for _, name := range []string{"libc-2.24.so", "libc.so.6", "libc.so", "absolute", "empty", "empty-link"} {
-				want := "library content"
-				if strings.HasPrefix(name, "empty") {
-					want = ""
+			assertFileContent(t, filepath.Join(dst, "libc-2.24.so"), "library content")
+			for _, link := range links {
+				target, err := os.Readlink(filepath.Join(dst, link.name))
+				if err != nil || target != link.target {
+					t.Errorf("%s target = %q, error = %v; want %q", link.name, target, err, link.target)
 				}
-				assertFileContent(t, filepath.Join(dst, name), want)
-				info, err := os.Lstat(filepath.Join(dst, name))
-				if err != nil {
-					t.Fatal(err)
-				}
-				target, err := os.Stat(filepath.Join(src, name))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if !info.Mode().IsRegular() || info.Mode().Perm() != target.Mode().Perm() {
-					t.Errorf("%s mode = %s, want regular file with permissions %s", name, info.Mode(), target.Mode().Perm())
-				}
-			}
-			if target, err := os.Readlink(filepath.Join(src, "libc.so.6")); err != nil || target != "libc-2.24.so" {
-				t.Fatalf("source link changed: target = %q, error = %v", target, err)
 			}
 		})
 	}
 }
 
 func TestPackFSFileSymlinkRoundTrip(t *testing.T) {
-	// A generic FS can report a link in ReadDir while Open returns its target.
-	src := &faultFS{
-		fsys:     fstest.MapFS{"libc.so": &fstest.MapFile{Data: []byte("library content"), Mode: 0o755}},
-		modeName: "libc.so",
-		mode:     fs.ModeSymlink | 0o777,
+	src := fstest.MapFS{
+		"libc.so":   &fstest.MapFile{Data: []byte("libc.so.6"), Mode: fs.ModeSymlink | 0o777},
+		"libc.so.6": &fstest.MapFile{Data: []byte("library content"), Mode: 0o755},
 	}
 	for _, ext := range []string{".zip", ".tar.gz"} {
 		t.Run(ext, func(t *testing.T) {
@@ -192,6 +173,10 @@ func TestPackFSFileSymlinkRoundTrip(t *testing.T) {
 			if _, err := Unpack(archive, dst); err != nil {
 				t.Fatal(err)
 			}
+			target, err := os.Readlink(filepath.Join(dst, "libc.so"))
+			if err != nil || target != "libc.so.6" {
+				t.Fatalf("target = %q, err = %v", target, err)
+			}
 			assertFileContent(t, filepath.Join(dst, "libc.so"), "library content")
 		})
 	}
@@ -199,12 +184,8 @@ func TestPackFSFileSymlinkRoundTrip(t *testing.T) {
 
 func TestPackDirectorySymlinksRoundTrip(t *testing.T) {
 	src := setupSourceDir(t)
-	for _, link := range []struct{ name, target string }{
-		{"lib64", "lib"},
-		{"lib-alias", "lib64"},
-		{"absolute", filepath.Join(src, "lib")},
-		{filepath.Join("lib", "libfoo.so"), "libfoo.a"},
-	} {
+	links := []struct{ name, target string }{{"lib64", "lib"}, {"lib-alias", "lib64"}, {"absolute", filepath.Join(src, "lib")}, {filepath.Join("lib", "libfoo.so"), "libfoo.a"}, {"missing-dir", "missing"}, {"cycle", "."}}
+	for _, link := range links {
 		if err := os.Symlink(link.target, filepath.Join(src, link.name)); err != nil {
 			t.Skipf("symlink unsupported: %v", err)
 		}
@@ -219,25 +200,13 @@ func TestPackDirectorySymlinksRoundTrip(t *testing.T) {
 			if _, err := Unpack(archive, dst); err != nil {
 				t.Fatal(err)
 			}
-			for _, dir := range []string{"lib", "lib64", "lib-alias", "absolute"} {
-				for _, name := range []string{"libfoo.a", "libfoo.so"} {
-					assertFileContent(t, filepath.Join(dst, dir, name), "archive")
+			for _, link := range links {
+				target, err := os.Readlink(filepath.Join(dst, link.name))
+				if err != nil || target != link.target {
+					t.Errorf("%s target = %q, error = %v; want %q", link.name, target, err, link.target)
 				}
 			}
-		})
-	}
-}
-
-func TestPackRejectsDirectorySymlinkCycle(t *testing.T) {
-	src := setupSourceDir(t)
-	if err := os.Symlink(".", filepath.Join(src, "cycle")); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-	for _, ext := range []string{".zip", ".tar.gz"} {
-		t.Run(ext, func(t *testing.T) {
-			if err := Pack(src, filepath.Join(t.TempDir(), "out"+ext), json.RawMessage(`{}`)); err == nil {
-				t.Fatal("Pack succeeded with a directory symlink cycle")
-			}
+			assertFileContent(t, filepath.Join(dst, "lib64", "libfoo.so"), "archive")
 		})
 	}
 }
@@ -312,26 +281,18 @@ func TestPackReturnsWalkError(t *testing.T) {
 }
 
 func TestPackReturnsOpenError(t *testing.T) {
-	src := t.TempDir()
-	if err := os.Symlink(filepath.Join(src, "missing-target"), filepath.Join(src, "broken-link")); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-	dst := filepath.Join(t.TempDir(), "out.zip")
-
-	if err := Pack(src, dst, json.RawMessage(`{}`)); err == nil {
-		t.Fatal("Pack error = nil, want open error")
+	testErr := errors.New("source read failed")
+	src := &faultFS{fsys: fstest.MapFS{"payload": &fstest.MapFile{Data: []byte("data")}}, openErrName: "payload", err: testErr}
+	if err := PackFS(src, filepath.Join(t.TempDir(), "out.zip"), json.RawMessage(`{}`)); !errors.Is(err, testErr) {
+		t.Fatalf("PackFS error = %v, want %v", err, testErr)
 	}
 }
 
 func TestPackTarGzReturnsOpenError(t *testing.T) {
-	src := t.TempDir()
-	if err := os.Symlink(filepath.Join(src, "missing-target"), filepath.Join(src, "broken-link")); err != nil {
-		t.Skipf("symlink unsupported: %v", err)
-	}
-	dst := filepath.Join(t.TempDir(), "out.tar.gz")
-
-	if err := Pack(src, dst, json.RawMessage(`{}`)); err == nil {
-		t.Fatal("Pack error = nil, want open error")
+	testErr := errors.New("source read failed")
+	src := &faultFS{fsys: fstest.MapFS{"payload": &fstest.MapFile{Data: []byte("data")}}, openErrName: "payload", err: testErr}
+	if err := PackFS(src, filepath.Join(t.TempDir(), "out.tar.gz"), json.RawMessage(`{}`)); !errors.Is(err, testErr) {
+		t.Fatalf("PackFS error = %v, want %v", err, testErr)
 	}
 }
 
@@ -436,6 +397,7 @@ func TestPackReturnsWriterErrors(t *testing.T) {
 type faultFS struct {
 	fsys        fs.FS
 	readErrName string
+	openErrName string
 	infoErrName string
 	modeName    string
 	mode        fs.FileMode
@@ -443,6 +405,9 @@ type faultFS struct {
 }
 
 func (f *faultFS) Open(name string) (fs.File, error) {
+	if name == f.openErrName && f.err != nil {
+		return nil, f.err
+	}
 	if f.fsys == nil {
 		return nil, f.err
 	}

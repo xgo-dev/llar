@@ -37,6 +37,34 @@ func TestUnpack(t *testing.T) {
 			}
 		})
 	}
+	t.Run("symlink cannot redirect extraction outside destination", func(t *testing.T) {
+		outside := t.TempDir()
+		for _, ext := range []string{".tar.gz", ".zip"} {
+			t.Run(ext, func(t *testing.T) {
+				var artifact string
+				if ext == ".tar.gz" {
+					artifact = writeTestTarGz(t,
+						tarTestEntry{header: tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: outside}},
+						tarTestEntry{header: tar.Header{Name: "link/escape", Mode: 0o644}, body: []byte("data")},
+						tarTestEntry{header: tar.Header{Name: metadataPath, Mode: 0o644}, body: []byte(`{}`)},
+					)
+				} else {
+					artifact = writeTestZip(t,
+						zipTestEntry{name: "link", mode: fs.ModeSymlink | 0o777, body: []byte(outside)},
+						zipTestEntry{name: "link/escape", mode: 0o644, body: []byte("data")},
+						zipTestEntry{name: metadataPath, mode: 0o644, body: []byte(`{}`)},
+					)
+				}
+				if _, err := Unpack(artifact, t.TempDir()); err == nil {
+					t.Fatal("Unpack error = nil")
+				}
+				if _, err := os.Stat(filepath.Join(outside, "escape")); !errors.Is(err, fs.ErrNotExist) {
+					t.Fatalf("outside file stat error = %v", err)
+				}
+			})
+		}
+	})
+
 }
 
 func TestUnpackRejectsInvalidArtifact(t *testing.T) {
@@ -113,7 +141,7 @@ func TestUnpackRejectsInvalidArtifact(t *testing.T) {
 		}
 		writer := zip.NewWriter(file)
 		header := &zip.FileHeader{Name: "link"}
-		header.SetMode(os.ModeSymlink | 0o777)
+		header.SetMode(os.ModeNamedPipe | 0o600)
 		if _, err := writer.CreateHeader(header); err != nil {
 			t.Fatal(err)
 		}
@@ -191,10 +219,6 @@ func TestUnpackTarGzEntries(t *testing.T) {
 		{
 			name:  "metadata symlink",
 			entry: tarTestEntry{header: tar.Header{Name: metadataPath, Typeflag: tar.TypeSymlink, Linkname: "target"}},
-		},
-		{
-			name:  "payload symlink",
-			entry: tarTestEntry{header: tar.Header{Name: "link", Typeflag: tar.TypeSymlink, Linkname: "target"}},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -289,25 +313,37 @@ func TestUnpackZipEntries(t *testing.T) {
 
 func TestWriteUnpackedFileErrors(t *testing.T) {
 	t.Run("create parent", func(t *testing.T) {
-		root := t.TempDir()
-		parent := filepath.Join(root, "parent")
-		if err := os.WriteFile(parent, []byte("file"), 0o644); err != nil {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "parent"), []byte("file"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := writeUnpackedFile(filepath.Join(parent, "child"), 0o644, strings.NewReader("data")); err == nil {
+		root, err := os.OpenRoot(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		if err := writeUnpackedFile(root, filepath.Join("parent", "child"), 0o644, strings.NewReader("data")); err == nil {
 			t.Fatal("writeUnpackedFile error = nil")
 		}
 	})
-
 	t.Run("open target", func(t *testing.T) {
-		if err := writeUnpackedFile(t.TempDir(), 0o644, strings.NewReader("data")); err == nil {
+		root, err := os.OpenRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
+		if err := writeUnpackedFile(root, ".", 0o644, strings.NewReader("data")); err == nil {
 			t.Fatal("writeUnpackedFile error = nil")
 		}
 	})
-
 	t.Run("copy", func(t *testing.T) {
+		root, err := os.OpenRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer root.Close()
 		testErr := errors.New("read failed")
-		err := writeUnpackedFile(filepath.Join(t.TempDir(), "file"), 0o644, errorReader{err: testErr})
+		err = writeUnpackedFile(root, "file", 0o644, errorReader{err: testErr})
 		if !errors.Is(err, testErr) {
 			t.Fatalf("writeUnpackedFile error = %v, want %v", err, testErr)
 		}
