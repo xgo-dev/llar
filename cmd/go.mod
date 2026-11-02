@@ -6,7 +6,6 @@ require (
 	github.com/goplus/llar v0.3.5
 	github.com/goplus/llar/x v0.0.0-00010101000000-000000000000
 	github.com/jessevdk/go-flags v1.6.1
-	github.com/qiniu/x v1.18.3
 	github.com/spf13/cobra v1.10.2
 )
 
@@ -18,6 +17,7 @@ require (
 	github.com/goplus/xgo v1.7.6-0.20260818050008-fd36b6192e30 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/petermattis/goid v0.0.0-20260713073324-57ed88f34a0a // indirect
+	github.com/qiniu/x v1.18.3 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/visualfc/funcval v0.1.5 // indirect
 	github.com/visualfc/gid v0.3.5 // indirect
