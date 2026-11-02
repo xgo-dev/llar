@@ -105,18 +105,3 @@ func Read(name string) ([]byte, error) {
 
 	return io.ReadAll(f)
 }
-
-// Write opens the named file (creating it with the given permissions if needed),
-// then write-locks it and overwrites it with the given content.
-func Write(name string, content io.Reader, perm fs.FileMode) (err error) {
-	f, err := OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
-	if err != nil {
-		return err
-	}
-
-	_, err = io.Copy(f, content)
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	return err
-}
