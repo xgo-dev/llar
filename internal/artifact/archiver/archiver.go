@@ -22,7 +22,8 @@ func Pack(srcDir, dst string, metainfo json.RawMessage) error {
 
 // PackFS writes src as an LLAR binary artifact at dst.
 // The metainfo bytes are written verbatim to .llar/metadata.json.
-// Symlinks are followed: their target files are stored under the link's name.
+// Symlinks are stored with their original targets, including dangling links.
+// A source containing symlinks must implement fs.ReadLinkFS.
 func PackFS(src fs.FS, dst string, metainfo json.RawMessage) error {
 	if !json.Valid(metainfo) {
 		return fmt.Errorf("invalid artifact metainfo JSON")
@@ -63,6 +64,14 @@ func packZip(w *zip.Writer, src fs.FS) error {
 
 		writer, err := w.CreateHeader(header)
 		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			target, err := fs.ReadLink(src, name)
+			if err != nil {
+				return err
+			}
+			_, err = io.WriteString(writer, target)
 			return err
 		}
 		file, err := src.Open(name)
@@ -114,13 +123,24 @@ func writeTarGzArtifact(src fs.FS, dst string, metainfo json.RawMessage) error {
 
 func packTar(tw *tar.Writer, src fs.FS) error {
 	add := func(name string, info fs.FileInfo) error {
-		header, err := tar.FileInfoHeader(info, "")
+		var target string
+		if info.Mode()&fs.ModeSymlink != 0 {
+			var err error
+			target, err = fs.ReadLink(src, name)
+			if err != nil {
+				return err
+			}
+		}
+		header, err := tar.FileInfoHeader(info, target)
 		if err != nil {
 			return err
 		}
 		header.Name = name
 		if err := tw.WriteHeader(header); err != nil {
 			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return nil
 		}
 		file, err := src.Open(name)
 		if err != nil {
@@ -151,16 +171,6 @@ func walkFiles(src fs.FS, add func(string, fs.FileInfo) error) error {
 		info, err := entry.Info()
 		if err != nil {
 			return err
-		}
-		if info.Mode()&fs.ModeSymlink != 0 {
-			info, err = fs.Stat(src, name)
-			if err != nil {
-				return err
-			}
-			if info.IsDir() {
-				// WalkDir does not follow directory links such as lib64 -> lib.
-				return fs.WalkDir(src, name, walk)
-			}
 		}
 		return add(name, info)
 	}

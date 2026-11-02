@@ -1,0 +1,17 @@
+import "os"
+
+id "test/hookdep"
+
+fromVer "1.0.0"
+
+onRequire (proj, deps) => {
+	deps.require "test/testhook", "1.0.0"
+}
+
+onBuild ctx => {
+	ctx.setMetadata "-lROOT"
+}
+
+onTest ctx => {
+	os.writeFile(ctx.outputDir+"/root-ontest.stamp", []byte("ran"), 0o644)!
+}

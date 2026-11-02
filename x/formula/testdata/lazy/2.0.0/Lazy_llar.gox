@@ -1,0 +1,8 @@
+id "test/lazy"
+fromVer "2.0.0"
+
+echo "failed initialization"
+panic "unselected formula must not execute"
+
+onBuild ctx => {
+}

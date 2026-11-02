@@ -1,0 +1,20 @@
+id "test/lazy"
+fromVer "1.0.0"
+
+echo "initialized"
+
+onRequire (proj, deps) => {
+	deps.require "test/dependency", "1.0.0"
+}
+
+onBuild ctx => {
+	ctx.setMetadata "built"
+}
+
+onTest ctx => {
+	echo "tested"
+}
+
+filter => {
+	return true
+}

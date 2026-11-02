@@ -1,7 +1,0 @@
-id "DaveGamble/cJSON"
-
-fromVer "v1.7.18"
-
-onBuild ctx => {
-	ctx.setMetadata "-lcjson"
-}

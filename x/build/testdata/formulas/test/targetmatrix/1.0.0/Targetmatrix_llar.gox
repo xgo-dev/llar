@@ -1,0 +1,7 @@
+id "test/targetmatrix"
+
+fromVer "1.0.0"
+
+onBuild ctx => {
+	ctx.setMetadata target.require["os"][0] + "|" + target.options["ssl"][0]
+}
