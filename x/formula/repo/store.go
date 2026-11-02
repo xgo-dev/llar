@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/goplus/llar/internal/lockedfile"
+	"github.com/goplus/llar/x/lockedfile"
 	"github.com/goplus/llar/mod/module"
 	"github.com/goplus/llar/x/vcs"
 )
