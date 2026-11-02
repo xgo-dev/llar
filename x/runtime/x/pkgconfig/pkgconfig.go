@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/goplus/llar/internal/execbroker"
+	"github.com/goplus/llar/x/internal/execbroker"
 )
 
 // Use makes pkg-config metadata installed at root available to subsequent

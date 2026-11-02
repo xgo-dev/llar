@@ -11,7 +11,7 @@
 ### Environment Access in `x`
 
 - All environment reads and writes under `x/`, including tests and test
-  helpers, must use `internal/execbroker` (`Getenv`, `LookupEnv`, `Setenv`,
+  helpers, must use `x/internal/execbroker` (`Getenv`, `LookupEnv`, `Setenv`,
   `Unsetenv`, `Clearenv`, `Environ`, or `ExpandEnv`). Do not call the `os` or
   `syscall` environment APIs directly from `x/`.
 - This approved directory-only migration preserves existing environment code.

@@ -3,7 +3,7 @@ package build
 import (
 	"os"
 
-	"github.com/goplus/llar/internal/execbroker"
+	"github.com/goplus/llar/x/internal/execbroker"
 )
 
 // Command describes a command before target defaults are applied.

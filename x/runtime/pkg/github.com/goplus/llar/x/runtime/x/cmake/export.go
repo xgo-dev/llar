@@ -15,7 +15,7 @@ func init() {
 		Name: "cmake",
 		Path: "github.com/goplus/llar/x/runtime/x/cmake",
 		Deps: map[string]string{
-			"github.com/goplus/llar/internal/execbroker": "execbroker",
+			"github.com/goplus/llar/x/internal/execbroker": "execbroker",
 			"os":            "os",
 			"path/filepath": "filepath",
 			"runtime":       "runtime",

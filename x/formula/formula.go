@@ -16,7 +16,7 @@ import (
 
 	"github.com/goplus/ixgo"
 	"github.com/goplus/ixgo/xgobuild"
-	"github.com/goplus/llar/internal/execbroker"
+	"github.com/goplus/llar/x/internal/execbroker"
 	_ "github.com/goplus/llar/x/runtime"
 	"github.com/goplus/llar/x/runtime/formula"
 )
