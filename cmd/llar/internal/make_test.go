@@ -16,11 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/goplus/llar/internal/execbroker"
-	"github.com/goplus/llar/mod/module"
-	loader "github.com/goplus/llar/x/formula"
 	"github.com/goplus/llar/x/formula/repo"
-	"github.com/goplus/llar/x/modules"
 	"github.com/goplus/llar/x/runtime/formula"
 	"github.com/goplus/llar/x/vcs"
 )
@@ -810,49 +806,61 @@ func TestBuildModuleReturnsOutputPackagingError(t *testing.T) {
 
 func TestMakeLocal_VerboseWritesBuildOutputToStderr(t *testing.T) {
 	formulaDir := setupLocalFormulas(t)
-	store := repo.New(formulaDir, &noopVCSRepo{})
-	ctx := context.Background()
-	matrix := computeMatrix()
-	mods, err := modules.Load(ctx, module.Version{Path: "test/liba", Version: "1.0.0"}, modules.Options{
-		FormulaStore: store,
-		Matrix:       matrix,
-	})
-	if err != nil {
-		t.Fatalf("modules.Load() failed: %v", err)
-	}
+	withMockRemoteStore(t, repo.New(formulaDir, &noopVCSRepo{}))
 
-	savedVerbose := makeVerbose
-	makeVerbose = true
-	t.Cleanup(func() { makeVerbose = savedVerbose })
-
-	stdout, stderr, restore := captureProcessStreams(t)
-	buildCtx := formula.NewContext(nil, "", "", "", nil)
-	formulas, err := loader.LoadFS(mods[0].FS, ".")
-	if err != nil || len(formulas) != 1 {
-		restore()
-		t.Fatalf("LoadFS() = %d formulas, %v; want one formula", len(formulas), err)
+	// Avoid a cache hit: OnBuild must run to test where its output goes.
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	if runtime.GOOS == "windows" {
+		t.Setenv("LocalAppData", t.TempDir())
 	}
-	formulas[0].SetMatrix(matrix)
-	err = execbroker.Do(execbroker.Scope{
-		Stdout: os.Stderr,
-		Stderr: os.Stderr,
-	}, func() error {
-		formulas[0].OnBuild(buildCtx)
-		return nil
-	})
-	restore()
+	isolatedWorkspaceDir(t)
+
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
+	}
+	sourceRoot := t.TempDir()
+	sourceRepo := filepath.Join(sourceRoot, "liba.git")
+	sourceWork := filepath.Join(sourceRoot, "work")
+	runGit("init", "--bare", sourceRepo)
+	runGit("init", sourceWork)
+	runGit("-C", sourceWork, "config", "user.email", "test@example.com")
+	runGit("-C", sourceWork, "config", "user.name", "llar test")
+	if err := os.WriteFile(filepath.Join(sourceWork, "source.txt"), []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("-C", sourceWork, "add", "source.txt")
+	runGit("-C", sourceWork, "commit", "-m", "initial")
+	runGit("-C", sourceWork, "tag", "1.0.0")
+	runGit("-C", sourceWork, "push", sourceRepo, "1.0.0")
+
+	gitConfig := filepath.Join(t.TempDir(), "gitconfig")
+	runGit("config", "--file", gitConfig,
+		fmt.Sprintf("url.file://%s.insteadOf", sourceRepo),
+		"https://github.com/test/liba.git")
+	t.Setenv("GIT_CONFIG_GLOBAL", gitConfig)
+
+	originalDir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chdir(filepath.Join(formulaDir, "test", "liba")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalDir) })
 
-	if buildCtx.Out.Metadata() != "-lA" {
-		t.Fatalf("metadata = %q, want %q", buildCtx.Out.Metadata(), "-lA")
+	stdout, stderr, err := runMakeCmdStreams(t, "-v", "./@1.0.0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(stdout.String()); got != "" {
-		t.Fatalf("stdout = %q, want no build output", got)
+	if got := strings.TrimSpace(stdout); got != "-lA" {
+		t.Fatalf("stdout = %q, want metadata -lA", got)
 	}
-	if !strings.Contains(stderr.String(), "verbose build output") {
-		t.Fatalf("stderr = %q, want verbose build output", stderr.String())
+	if !strings.Contains(stderr, "verbose build output") {
+		t.Fatalf("stderr = %q, want verbose build output", stderr)
 	}
 }
 
