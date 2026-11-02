@@ -15,6 +15,8 @@ import (
 )
 
 // Unpack extracts an LLAR binary artifact into dst and returns its metainfo.
+// Symlink targets are preserved verbatim. Extraction never writes through a
+// symlink outside dst, for example a later entry below a link to /lib.
 func Unpack(src, dst string) (metadata json.RawMessage, err error) {
 	switch {
 	case strings.HasSuffix(src, ".tar.gz"):
@@ -38,6 +40,15 @@ func unpackTarGz(src, dst string) (json.RawMessage, error) {
 		return nil, err
 	}
 	defer gz.Close()
+
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(dst)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
 
 	var metainfo json.RawMessage
 	tr := tar.NewReader(gz)
@@ -67,14 +78,20 @@ func unpackTarGz(src, dst string) (json.RawMessage, error) {
 			continue
 		}
 
-		target := filepath.Join(dst, name)
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, header.FileInfo().Mode().Perm()); err != nil {
+			if err := root.MkdirAll(name, header.FileInfo().Mode().Perm()); err != nil {
 				return nil, err
 			}
 		case tar.TypeReg, tar.TypeRegA:
-			if err := writeUnpackedFile(target, header.FileInfo().Mode().Perm(), tr); err != nil {
+			if err := writeUnpackedFile(root, name, header.FileInfo().Mode().Perm(), tr); err != nil {
+				return nil, err
+			}
+		case tar.TypeSymlink:
+			if err := root.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+				return nil, err
+			}
+			if err := root.Symlink(header.Linkname, name); err != nil {
 				return nil, err
 			}
 		default:
@@ -89,6 +106,15 @@ func unpackZip(src, dst string) (json.RawMessage, error) {
 		return nil, err
 	}
 	defer zr.Close()
+
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return nil, err
+	}
+	root, err := os.OpenRoot(dst)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
 
 	var metainfo json.RawMessage
 	for _, entry := range zr.File {
@@ -117,21 +143,31 @@ func unpackZip(src, dst string) (json.RawMessage, error) {
 			continue
 		}
 
-		target := filepath.Join(dst, name)
 		if info.IsDir() {
-			if err := os.MkdirAll(target, mode.Perm()); err != nil {
+			if err := root.MkdirAll(name, mode.Perm()); err != nil {
 				return nil, err
 			}
 			continue
 		}
-		if !mode.IsRegular() {
+		if !mode.IsRegular() && mode&fs.ModeSymlink == 0 {
 			return nil, fmt.Errorf("extract %s: unsupported zip mode %s", entry.Name, mode)
 		}
 		file, err := entry.Open()
 		if err != nil {
 			return nil, err
 		}
-		err = writeUnpackedFile(target, mode.Perm(), file)
+		if mode&fs.ModeSymlink != 0 {
+			var target []byte
+			target, err = io.ReadAll(file)
+			if err == nil {
+				err = root.MkdirAll(filepath.Dir(name), 0o755)
+			}
+			if err == nil {
+				err = root.Symlink(string(target), name)
+			}
+		} else {
+			err = writeUnpackedFile(root, name, mode.Perm(), file)
+		}
 		closeErr := file.Close()
 		if err != nil {
 			return nil, err
@@ -146,11 +182,11 @@ func unpackZip(src, dst string) (json.RawMessage, error) {
 	return metainfo, nil
 }
 
-func writeUnpackedFile(name string, mode fs.FileMode, src io.Reader) error {
-	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+func writeUnpackedFile(root *os.Root, name string, mode fs.FileMode, src io.Reader) error {
+	if err := root.MkdirAll(filepath.Dir(name), 0o755); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
