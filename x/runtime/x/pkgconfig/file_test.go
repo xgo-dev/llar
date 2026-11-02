@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/goplus/llar/internal/execbroker"
+	"github.com/goplus/llar/x/internal/execbroker"
 	"github.com/kballard/go-shellquote"
 )
 

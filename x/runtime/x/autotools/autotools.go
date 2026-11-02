@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/goplus/llar/internal/execbroker"
+	"github.com/goplus/llar/x/internal/execbroker"
 	"github.com/goplus/llar/x/runtime/x/pkgconfig"
 )
 

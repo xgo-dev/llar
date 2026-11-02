@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/goplus/llar/internal/execbroker"
 	"github.com/goplus/llar/mod/module"
+	"github.com/goplus/llar/x/internal/execbroker"
 	"github.com/goplus/llar/x/modules"
 )
 

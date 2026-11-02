@@ -16,7 +16,7 @@ func init() {
 		Path: "github.com/goplus/llar/x/runtime/x/pkgconfig",
 		Deps: map[string]string{
 			"fmt": "fmt",
-			"github.com/goplus/llar/internal/execbroker": "execbroker",
+			"github.com/goplus/llar/x/internal/execbroker": "execbroker",
 			"io":            "io",
 			"maps":          "maps",
 			"os":            "os",
